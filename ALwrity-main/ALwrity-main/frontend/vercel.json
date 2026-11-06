@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "buildCommand": "npm install --legacy-peer-deps && npm run build",
+  "outputDirectory": "build",
+  "installCommand": "npm install --legacy-peer-deps",
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/$1"
+    }
+  ],
+  "env": {
+    "REACT_APP_ENVIRONMENT": "production",
+    "REACT_APP_ENABLED_FEATURES": "podcast",
+    "REACT_APP_API_URL": "https://alwrity.onrender.com"
+  }
+}

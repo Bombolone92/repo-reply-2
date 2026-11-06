@@ -1,0 +1,103 @@
+"""
+Content Angle Generator - AI-powered content angle discovery.
+
+Generates strategic content angles from research content for blog posts.
+"""
+
+from typing import List
+from loguru import logger
+
+
+class ContentAngleGenerator:
+    """Generates strategic content angles from research content."""
+    
+    def generate(self, content: str, topic: str, industry: str, user_id: str = None) -> List[str]:
+        """Parse strategic content angles from the research content using AI."""
+        angles_prompt = f"""
+        Analyze the following research content and create strategic content angles for: {topic} in {industry}
+        
+        Research Content:
+        {content[:8000]}
+        
+        Create 7 compelling content angles that:
+        1. Leverage current trends and data from the research
+        2. Address content gaps and opportunities
+        3. Appeal to different audience segments
+        4. Include unique perspectives not covered by competitors
+        5. Incorporate specific statistics, case studies, or expert insights
+        6. Create emotional connection and urgency
+        7. Provide actionable value to readers
+        
+        Each angle should be:
+        - Specific and data-driven
+        - Unique and differentiated
+        - Compelling and click-worthy
+        - Actionable for readers
+        
+        Respond with JSON:
+        {{
+            "content_angles": [
+                "Specific angle 1 with data/trends",
+                "Specific angle 2 with unique perspective",
+                "Specific angle 3 with actionable insights",
+                "Specific angle 4 with case study focus",
+                "Specific angle 5 with future outlook",
+                "Specific angle 6 with problem-solving focus",
+                "Specific angle 7 with industry insights"
+            ]
+        }}
+        """
+        
+        from services.llm_providers.main_text_generation import llm_text_gen
+        
+        angles_schema = {
+            "type": "object",
+            "properties": {
+                "content_angles": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 5,
+                    "maxItems": 7
+                }
+            },
+            "required": ["content_angles"]
+        }
+        
+        raw = llm_text_gen(
+            prompt=angles_prompt,
+            user_id=user_id
+        )
+        
+        # Parse JSON from LLM response (works with both string and dict return types)
+        import json, re
+        if isinstance(raw, str):
+            cleaned = raw.strip()
+            if cleaned.startswith('```json'):
+                cleaned = cleaned[7:]
+            if cleaned.startswith('```'):
+                cleaned = cleaned[3:]
+            if cleaned.endswith('```'):
+                cleaned = cleaned[:-3]
+            cleaned = cleaned.strip()
+            try:
+                angles_result = json.loads(cleaned)
+            except json.JSONDecodeError:
+                json_match = re.search(r'\{.*\}', cleaned, re.DOTALL)
+                if json_match:
+                    angles_result = json.loads(json_match.group(0))
+                else:
+                    raise ValueError(f"Content angles returned non-JSON string: {cleaned[:200]}")
+        elif isinstance(raw, dict):
+            angles_result = raw
+        else:
+            raise ValueError(f"Unexpected LLM response type: {type(raw)}")
+        
+        if 'error' in angles_result:
+            raise ValueError(f"Content angles generation failed: {angles_result.get('error', 'Unknown error')}")
+        
+        if 'content_angles' not in angles_result:
+            raise ValueError(f"Content angles missing from response")
+        
+        logger.info("✅ AI content angles generation completed successfully")
+        return angles_result['content_angles'][:7]
+    

@@ -1,0 +1,56 @@
+name: Question
+description: Ask a question about ALwrity
+title: "[QUESTION] "
+labels: ["question", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for your question! Please provide as much detail as possible to help us help you.
+        
+  - type: textarea
+    id: question
+    attributes:
+      label: What's your question?
+      description: Please describe your question in detail
+      placeholder: What would you like to know about ALwrity?
+    validations:
+      required: true
+      
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Any additional context, screenshots, or information that might help
+      placeholder: Add any relevant context here...
+      
+  - type: dropdown
+    id: component
+    attributes:
+      label: Which component/feature is this about?
+      description: Select the most relevant component
+      options:
+        - Blog Writer
+        - SEO Dashboard
+        - Content Planning
+        - Facebook Writer
+        - LinkedIn Writer
+        - Onboarding
+        - Authentication
+        - API
+        - Installation/Setup
+        - Other
+    validations:
+      required: true
+      
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      description: How urgent is this question?
+      options:
+        - Low (general question)
+        - Medium (affecting workflow)
+        - High (blocking progress)
+    validations:
+      required: true

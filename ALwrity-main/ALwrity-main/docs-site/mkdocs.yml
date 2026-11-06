@@ -1,0 +1,357 @@
+site_name: ALwrity Documentation
+site_description: AI-Powered Digital Marketing Platform - Complete documentation for content creation, SEO optimization, and AI-driven marketing tools.
+site_author: ALwrity Team
+site_url: https://alwrity.github.io/ALwrity
+repo_url: https://github.com/AJaySi/ALwrity
+repo_name: AJaySi/ALwrity
+edit_uri: edit/main/docs-site/docs/
+
+# Copyright
+copyright: Copyright &copy; 2024 ALwrity Team
+
+# Configuration
+theme:
+  name: material
+  palette:
+    # Light mode
+    - scheme: default
+      primary: blue
+      accent: light blue
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Dark mode
+    - scheme: slate
+      primary: blue
+      accent: light blue
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.path
+    - navigation.top
+    - search.highlight
+    - search.share
+    - search.suggest
+    - content.code.copy
+    - content.code.annotate
+    - content.action.edit
+    - content.action.view
+  font:
+    text: Roboto
+    code: Roboto Mono
+  icon:
+    repo: fontawesome/brands/github
+    edit: material/pencil
+    view: material/eye
+
+# Plugins
+plugins:
+  - search:
+      lang: en
+
+# Markdown extensions
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+      combine_header_slug: true
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - attr_list
+  - md_in_html
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - tables
+  - toc:
+      permalink: true
+      title: On this page
+
+# Extra configuration
+extra:
+  verification:
+    google: ROJvq1TNFtABjd8t35PZLg1FYAJoUgLHl0bn4roXkFA
+  generator: false
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/AJaySi/ALwrity
+    - icon: fontawesome/brands/x-twitter
+      link: https://x.com/ALwrity
+    - icon: fontawesome/solid/globe
+      link: https://alwrity.com
+
+# Navigation structure
+nav:
+  - Home: index.md
+  - About: about.md
+  - Getting Started:
+    - Quick Start: getting-started/quick-start.md
+    - Installation: getting-started/installation.md
+    - Configuration: getting-started/configuration.md
+    - First Steps: getting-started/first-steps.md
+    - User Installation: user-journeys/getting-started/installation.md
+    - User First Steps: user-journeys/getting-started/first-steps.md
+  - User Journeys:
+    - Overview: user-journeys/overview.md
+    - Content Creators:
+      - Overview: user-journeys/content-creators/overview.md
+      - Getting Started: user-journeys/content-creators/getting-started.md
+      - First Content: user-journeys/content-creators/first-content.md
+      - Features Overview: user-journeys/content-creators/features-overview.md
+      - SEO Optimization: user-journeys/content-creators/seo-optimization.md
+      - Content Strategy: user-journeys/content-creators/content-strategy.md
+      - Multi-Platform: user-journeys/content-creators/multi-platform.md
+      - Scaling: user-journeys/content-creators/scaling.md
+      - Performance Tracking: user-journeys/content-creators/performance-tracking.md
+      - Workflow Optimization: user-journeys/content-creators/workflow-optimization.md
+      - Troubleshooting: user-journeys/content-creators/troubleshooting.md
+    - Non-Tech Content Creators:
+      - Overview: user-journeys/non-tech-creators/overview.md
+      - Getting Started: user-journeys/non-tech-creators/getting-started.md
+      - First Content: user-journeys/non-tech-creators/first-content.md
+      - SEO Basics: user-journeys/non-tech-creators/seo-basics.md
+      - SEO Optimization: user-journeys/non-tech-creators/seo-optimization.md
+      - Content Strategy: user-journeys/non-tech-creators/content-strategy.md
+      - Content Optimization: user-journeys/non-tech-creators/content-optimization.md
+      - Scaling: user-journeys/non-tech-creators/scaling.md
+      - Performance Tracking: user-journeys/non-tech-creators/performance-tracking.md
+      - Workflow Optimization: user-journeys/non-tech-creators/workflow-optimization.md
+      - Audience Growth: user-journeys/non-tech-creators/audience-growth.md
+      - Podcast Maker Journey: user-journeys/non-tech-creators/podcast-maker-journey.md
+      - Troubleshooting: user-journeys/non-tech-creators/troubleshooting.md
+      - Advanced Features: user-journeys/non-tech-creators/advanced-features.md
+      - Community & Support: user-journeys/non-tech-creators/community-support.md
+      - Success Stories: user-journeys/non-tech-creators/success-stories.md
+    - Developers:
+      - Overview: user-journeys/developers/overview.md
+      - API Quickstart: user-journeys/developers/api-quickstart.md
+      - Integration Guide: user-journeys/developers/integration-guide.md
+      - Advanced Usage: user-journeys/developers/advanced-usage.md
+      - Deployment: user-journeys/developers/deployment.md
+      - Performance Optimization: user-journeys/developers/performance-optimization.md
+      - Contributing: user-journeys/developers/contributing.md
+      - Self-Host Setup: user-journeys/developers/self-host-setup.md
+      - Codebase Exploration: user-journeys/developers/codebase-exploration.md
+      - Customization: user-journeys/developers/customization.md
+      - Team Collaboration: user-journeys/developers/team-collaboration.md
+      - Podcast Maker Journey: user-journeys/developers/podcast-maker-journey.md
+      - Scaling: user-journeys/developers/scaling.md
+    - Tech Marketers:
+      - Overview: user-journeys/tech-marketers/overview.md
+      - Strategy Setup: user-journeys/tech-marketers/strategy-setup.md
+      - Content Strategy: user-journeys/tech-marketers/content-strategy.md
+      - SEO Setup: user-journeys/tech-marketers/seo-setup.md
+      - Content Production: user-journeys/tech-marketers/content-production.md
+      - Team Onboarding: user-journeys/tech-marketers/team-onboarding.md
+      - Analytics: user-journeys/tech-marketers/analytics.md
+      - Advanced Analytics: user-journeys/tech-marketers/advanced-analytics.md
+      - Optimization: user-journeys/tech-marketers/optimization.md
+      - Scaling: user-journeys/tech-marketers/scaling.md
+      - Advanced Features: user-journeys/tech-marketers/advanced-features.md
+      - ROI Optimization: user-journeys/tech-marketers/roi-optimization.md
+      - Competitive Analysis: user-journeys/tech-marketers/competitive-analysis.md
+      - Team Management: user-journeys/tech-marketers/team-management.md
+      - Podcast Maker Journey: user-journeys/tech-marketers/podcast-maker-journey.md
+      - Troubleshooting: user-journeys/tech-marketers/troubleshooting.md
+    - Solopreneurs:
+      - Overview: user-journeys/solopreneurs/overview.md
+      - Brand Strategy: user-journeys/solopreneurs/brand-strategy.md
+      - Content Strategy: user-journeys/solopreneurs/content-strategy.md
+      - Social Media Setup: user-journeys/solopreneurs/social-media-setup.md
+      - Email Marketing: user-journeys/solopreneurs/email-marketing.md
+      - Content Production: user-journeys/solopreneurs/content-production.md
+      - Podcast Maker Journey: user-journeys/solopreneurs/podcast-maker-journey.md
+      - Audience Growth: user-journeys/solopreneurs/audience-growth.md
+      - Community Building: user-journeys/solopreneurs/community-building.md
+      - Performance Tracking: user-journeys/solopreneurs/performance-tracking.md
+      - Analytics: user-journeys/solopreneurs/analytics.md
+      - Business Growth: user-journeys/solopreneurs/business-growth.md
+      - Content Monetization: user-journeys/solopreneurs/content-monetization.md
+      - Advanced Branding: user-journeys/solopreneurs/advanced-branding.md
+      - Advanced Features: user-journeys/solopreneurs/advanced-features.md
+      - Troubleshooting: user-journeys/solopreneurs/troubleshooting.md
+    - Content Teams:
+      - Overview: user-journeys/content-teams/overview.md
+      - Team Management: user-journeys/content-teams/team-management.md
+      - Brand Consistency: user-journeys/content-teams/brand-consistency.md
+      - Workflow Setup: user-journeys/content-teams/workflow-setup.md
+      - Advanced Workflows: user-journeys/content-teams/advanced-workflows.md
+      - Performance Analytics: user-journeys/content-teams/performance-analytics.md
+      - Client Management: user-journeys/content-teams/client-management.md
+      - Team Scaling: user-journeys/content-teams/team-scaling.md
+      - Troubleshooting: user-journeys/content-teams/troubleshooting.md
+      - Content Production: user-journeys/content-teams/content-production.md
+      - Podcast Maker Journey: user-journeys/content-teams/podcast-maker-journey.md
+      - Workflow Optimization: user-journeys/content-teams/workflow-optimization.md
+      - Scaling: user-journeys/content-teams/scaling.md
+      - Performance Tracking: user-journeys/content-teams/performance-tracking.md
+    - Enterprise Users:
+      - Overview: user-journeys/enterprise/overview.md
+      - Implementation: user-journeys/enterprise/implementation.md
+      - Security & Compliance: user-journeys/enterprise/security-compliance.md
+      - Analytics: user-journeys/enterprise/analytics.md
+      - Performance Optimization: user-journeys/enterprise/performance-optimization.md
+      - Custom Solutions: user-journeys/enterprise/custom-solutions.md
+      - Strategic Planning: user-journeys/enterprise/strategic-planning.md
+      - Team Training: user-journeys/enterprise/team-training.md
+      - Scaling: user-journeys/enterprise/scaling.md
+      - Monitoring: user-journeys/enterprise/monitoring.md
+      - Podcast Maker Journey: user-journeys/enterprise/podcast-maker-journey.md
+      - Troubleshooting: user-journeys/enterprise/troubleshooting.md
+      - Advanced Security: user-journeys/enterprise/advanced-security.md
+  - Features:
+    - Today's Workflow:
+      - Overview: features/todays-workflow/overview.md
+      - User Guide: features/todays-workflow/workflow-guide.md
+      - Technical Architecture: features/todays-workflow/technical-architecture.md
+      - API Reference: features/todays-workflow/api-reference.md
+    - SIF & AI Agents:
+      - Overview: features/sif-agents/overview.md
+      - Semantic Indexing: features/sif-agents/semantic-indexing.md
+      - Test Your Indexing: features/sif-agents/test-your-indexing.md
+      - Agent Directory: features/sif-agents/agent-directory.md
+      - Committee System: features/sif-agents/committee-system.md
+      - ContentGuardianAgent: features/sif-agents/content-guardian.md
+    - Team Activity:
+      - Overview: features/team-activity/overview.md
+      - Quality Audit Panel: features/team-activity/quality-audit.md
+      - Trend Signals Panel: features/team-activity/trend-signals.md
+      - Alert System: features/team-activity/alert-system.md
+    - Onboarding System:
+      - Overview: features/onboarding/overview.md
+      - Onboarding Steps: features/onboarding/steps.md
+      - Scheduled Tasks: features/onboarding/scheduler-tasks.md
+      - Technical Reference: features/onboarding/technical-reference.md
+    - Backlink Outreach:
+      - Overview: features/backlink-outreach/overview.md
+      - Workflow Guide: features/backlink-outreach/workflow-guide.md
+      - Campaign Management: features/backlink-outreach/campaign-management.md
+      - Discovery: features/backlink-outreach/discovery.md
+      - Email Composer: features/backlink-outreach/email-composer.md
+      - Outreach Operations: features/backlink-outreach/outreach-operations.md
+      - Reply Inbox: features/backlink-outreach/reply-inbox.md
+      - Analytics: features/backlink-outreach/analytics.md
+      - API Reference: features/backlink-outreach/api-reference.md
+      - Configuration: features/backlink-outreach/configuration.md
+      - Implementation Overview: features/backlink-outreach/implementation-overview.md
+    - Blog Writer:
+      - Overview: features/blog-writer/overview.md
+      - Implementation Overview: features/blog-writer/implementation-overview.md
+      - API Reference: features/blog-writer/api-reference.md
+      - Workflow Guide: features/blog-writer/workflow-guide.md
+      - Research Integration: features/blog-writer/research.md
+      - SEO Analysis: features/blog-writer/seo-analysis.md
+      - GSC Brainstorm Service: features/blog-writer/gsc-brainstorm-service.md
+      - Implementation Spec: features/blog-writer/implementation-spec.md
+    - SEO Dashboard:
+      - Getting Started: features/seo-dashboard/index.md
+      - Quick Start: features/seo-dashboard/quick-start.md
+      - Overview: features/seo-dashboard/overview.md
+      - Phase 2A Complete Guide: features/seo-dashboard/phase2a-complete-guide.md
+      - Tools Reference: features/seo-dashboard/tools-reference.md
+      - Individual Tools Guide: features/seo-dashboard/individual-tools-guide.md
+      - Workflows & Automation: features/seo-dashboard/workflows-guide.md
+      - AI Copilot Guide: features/seo-dashboard/ai-copilot.md
+      - Competitive Analysis: features/seo-dashboard/competitive-analysis.md
+      - Content Strategy Guide: features/seo-dashboard/content-strategy-guide.md
+      - GSC Integration: features/seo-dashboard/gsc-integration.md
+      - Metadata Generation: features/seo-dashboard/metadata.md
+      - AI Overview Insights: features/seo-dashboard/ai-overview-insights.md
+      - Design Document: features/seo-dashboard/design-document.md
+      - Phase 2A - Enterprise Suite: features/seo-dashboard/phase2a-enterprise-seo.md
+      - Phase 2A - Advanced GSC: features/seo-dashboard/phase2a-advanced-gsc.md
+      - Phase 2A - LLM Insights: features/seo-dashboard/phase2a-llm-insights.md
+      - Phase 2A Implementation: features/seo-dashboard/phase2a-implementation.md
+    - Content Strategy:
+      - Overview: features/content-strategy/overview.md
+      - Persona Development: features/content-strategy/personas.md
+    - Persona System:
+      - Overview: features/persona/overview.md
+      - User Guide: features/persona/user-guide.md
+      - Platform Integration: features/persona/platform-integration.md
+      - Technical Architecture: features/persona/technical-architecture.md
+      - Implementation Examples: features/persona/implementation-examples.md
+      - Roadmap & Future: features/persona/roadmap.md
+    - AI Features:
+      - Assistive Writing: features/ai/assistive-writing.md
+      - Grounding UI: features/ai/grounding-ui.md
+    - LinkedIn Writer:
+      - Overview: features/linkedin-writer/overview.md
+    - Podcast Maker:
+      - Overview: features/podcast-maker/overview.md
+      - Workflow Guide: features/podcast-maker/workflow-guide.md
+      - Persona Journey (Host): features/podcast-maker/persona-journey-host.md
+      - Persona Journey (Producer): features/podcast-maker/persona-journey-producer.md
+      - Best Practices: features/podcast-maker/best-practices.md
+      - Implementation Overview: features/podcast-maker/implementation-overview.md
+      - API Reference: features/podcast-maker/api-reference.md
+      - YouTube Publishing: features/podcast-maker/youtube-publishing.md
+    - Integrations:
+      - Wix:
+        - Overview: features/integrations/wix/overview.md
+        - Setup: features/integrations/wix/setup.md
+        - Publishing: features/integrations/wix/publishing.md
+        - API: features/integrations/wix/api.md
+        - SEO Metadata: features/integrations/wix/seo-metadata.md
+        - Testing (Bypass): features/integrations/wix/testing-bypass.md
+    - Subscription:
+      - Overview: features/subscription/overview.md
+      - Setup: features/subscription/setup.md
+      - API Reference: features/subscription/api-reference.md
+      - Pricing: features/subscription/pricing.md
+      - Frontend Integration: features/subscription/frontend-integration.md
+      - Implementation Status: features/subscription/implementation-status.md
+      - Roadmap: features/subscription/roadmap.md
+    - Image Studio:
+      - Overview: features/image-studio/overview.md
+      - Modules: features/image-studio/modules.md
+      - Create Studio: features/image-studio/create-studio.md
+      - Edit Studio: features/image-studio/edit-studio.md
+      - Upscale Studio: features/image-studio/upscale-studio.md
+      - Social Optimizer: features/image-studio/social-optimizer.md
+      - Asset Library: features/image-studio/asset-library.md
+      - Transform Studio: features/image-studio/transform-studio.md
+      - Control Studio: features/image-studio/control-studio.md
+      - Workflow Guide: features/image-studio/workflow-guide.md
+      - Providers: features/image-studio/providers.md
+      - Templates: features/image-studio/templates.md
+      - Cost Guide: features/image-studio/cost-guide.md
+      - API Reference: features/image-studio/api-reference.md
+      - Implementation: features/image-studio/implementation-overview.md
+    - Video Studio:
+      - Overview: features/video-studio/overview.md
+    - YouTube Studio:
+      - Overview: features/youtube-studio/overview.md
+    - Story Writer:
+      - Overview: features/story-writer/overview.md
+  - API Reference:
+    - Overview: api/overview.md
+    - Authentication: api/authentication.md
+    - Rate Limiting: api/rate-limiting.md
+    - Error Codes: api/error-codes.md
+  - Guides:
+    - Troubleshooting: guides/troubleshooting.md
+    - Best Practices: guides/best-practices.md
+    - Performance: guides/performance.md

@@ -1,0 +1,740 @@
+import React, { useState, useMemo, useEffect } from 'react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
+import { getApiBaseUrl } from '../../utils/apiUrl';
+import {
+  Box,
+  Paper,
+  Typography,
+  Grid,
+  Stack,
+  Button,
+  ButtonGroup,
+  Tabs,
+  Tab,
+  Divider,
+  CircularProgress,
+  Alert,
+  Snackbar,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Checkbox,
+} from '@mui/material';
+import {
+  Search,
+  GridView,
+  ViewList,
+  Favorite,
+  Download,
+  Delete,
+  Image as ImageIcon,
+  Collections,
+  History,
+  Star,
+  Refresh,
+  Warning,
+  ArrowBack,
+  Add,
+  InfoOutlined,
+} from '@mui/icons-material';
+import { Tooltip } from '@mui/material';
+import { ImageStudioLayout } from './ImageStudioLayout';
+import { DashboardHeaderProps } from '../shared/types';
+import { useContentAssets, AssetFilters, ContentAsset } from '../../hooks/useContentAssets';
+import { intentResearchApi } from '../../api/intentResearchApi';
+import { AssetFilters as AssetFiltersComponent } from './AssetLibraryComponents/AssetFilters';
+import { AssetCard } from './AssetLibraryComponents/AssetCard';
+import { AssetTableRow } from './AssetLibraryComponents/AssetTableRow';
+
+const API_BASE_URL = getApiBaseUrl();
+
+export const AssetLibrary: React.FC = () => {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  
+  // Initialize filters from URL params if present
+  const urlSourceModule = searchParams.get('source_module');
+  const urlAssetType = searchParams.get('asset_type');
+  
+  const [searchQuery, setSearchQuery] = useState('');
+  const [idSearch, setIdSearch] = useState('');
+  const [modelSearch, setModelSearch] = useState('');
+  const [dateFilter, setDateFilter] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
+  const [tabValue, setTabValue] = useState(0);
+  const [filterType, setFilterType] = useState(() => {
+    // Set filter type from URL if present
+    if (urlAssetType) {
+      return urlAssetType === 'audio' ? 'audio' : urlAssetType === 'image' ? 'images' : urlAssetType === 'video' ? 'videos' : urlAssetType === 'text' ? 'text' : 'all';
+    }
+    return 'all';
+  });
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [selectedAssets, setSelectedAssets] = useState<Set<number>>(new Set());
+  const [page, setPage] = useState(0);
+  const [pageSize] = useState(50);
+  const [anchorEl, setAnchorEl] = useState<{ [key: number]: HTMLElement | null }>({});
+  const [snackbar, setSnackbar] = useState<{ open: boolean; message: string; severity: 'success' | 'error' }>({
+    open: false,
+    message: '',
+    severity: 'success',
+  });
+  const [textPreviews, setTextPreviews] = useState<{ [key: number]: { content: string; loading: boolean; expanded: boolean } }>({});
+
+  // Debounce search query
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchQuery);
+      setPage(0);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  const onSearch = (value: string) => {
+    setSearchQuery(value);
+  };
+
+  // Build filters based on UI state
+  const filters: AssetFilters = useMemo(() => {
+    const baseFilters: AssetFilters = {
+      limit: pageSize,
+      offset: page * pageSize,
+    };
+
+    // Apply source_module from URL if present
+    if (urlSourceModule) {
+      baseFilters.source_module = urlSourceModule as any;
+    }
+
+    // Combine all search terms
+    const searchTerms: string[] = [];
+    if (debouncedSearch) searchTerms.push(debouncedSearch);
+    if (idSearch) searchTerms.push(idSearch);
+    if (modelSearch) searchTerms.push(modelSearch);
+    
+    if (searchTerms.length > 0) {
+      baseFilters.search = searchTerms.join(' ');
+    }
+
+    if (filterType !== 'all') {
+      if (filterType === 'images') baseFilters.asset_type = 'image';
+      else if (filterType === 'videos') baseFilters.asset_type = 'video';
+      else if (filterType === 'audio') baseFilters.asset_type = 'audio';
+      else if (filterType === 'text') baseFilters.asset_type = 'text';
+      else if (filterType === 'favorites') baseFilters.favorites_only = true;
+    }
+
+    if (tabValue === 1) {
+      baseFilters.favorites_only = true;
+    }
+
+    return baseFilters;
+  }, [debouncedSearch, idSearch, modelSearch, filterType, tabValue, page, pageSize, urlSourceModule]);
+
+  const headerProps: DashboardHeaderProps | undefined = useMemo(() => {
+    if (!urlSourceModule) return undefined;
+    switch (urlSourceModule) {
+      case 'blog_writer':
+        return {
+          title: 'Blog Posts',
+        };
+      case 'research_tools':
+        return {
+          title: 'Research Documents',
+          subtitle: 'Access and manage your research projects.',
+        };
+      case 'product_marketing':
+        return {
+          title: 'Marketing Assets',
+          subtitle: 'Marketing content generated by Product Marketing tools.',
+        };
+      default:
+        return undefined;
+    }
+  }, [urlSourceModule]);
+
+  const { assets, loading, error, total, toggleFavorite, deleteAsset, trackUsage, refetch } = useContentAssets(filters);
+
+  // Refetch assets when component mounts with research_tools filter to show latest drafts
+  useEffect(() => {
+    if (urlSourceModule === 'research_tools' && urlAssetType === 'text') {
+      console.log('[AssetLibrary] Refetching assets for research_tools/text filter');
+      const timer = setTimeout(() => {
+        refetch();
+      }, 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [urlSourceModule, urlAssetType, refetch]);
+
+  const handleTabChange = (_event: React.SyntheticEvent, newValue: number) => {
+    setTabValue(newValue);
+    setPage(0);
+  };
+
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      setSelectedAssets(new Set(assets.map(a => a.id)));
+    } else {
+      setSelectedAssets(new Set());
+    }
+  };
+
+  const handleSelectAsset = (assetId: number, checked: boolean) => {
+    const newSelected = new Set(selectedAssets);
+    if (checked) {
+      newSelected.add(assetId);
+    } else {
+      newSelected.delete(assetId);
+    }
+    setSelectedAssets(newSelected);
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedAssets.size === 0) return;
+    if (!window.confirm(`Delete ${selectedAssets.size} selected asset(s)?`)) return;
+    
+    try {
+      await Promise.all(Array.from(selectedAssets).map(id => deleteAsset(id)));
+      setSelectedAssets(new Set());
+      setSnackbar({ open: true, message: `${selectedAssets.size} asset(s) deleted`, severity: 'success' });
+    } catch (err) {
+      setSnackbar({ open: true, message: 'Failed to delete assets', severity: 'error' });
+    }
+  };
+
+  const handleBulkDownload = async () => {
+    if (selectedAssets.size === 0) return;
+    
+    try {
+      const selectedAssetsData = assets.filter(a => selectedAssets.has(a.id));
+      await Promise.all(selectedAssetsData.map(asset => trackUsage(asset.id, 'download')));
+      
+      // Open each in new tab
+      selectedAssetsData.forEach(asset => {
+        window.open(asset.file_url, '_blank');
+      });
+      
+      setSnackbar({ open: true, message: `Downloading ${selectedAssets.size} asset(s)`, severity: 'success' });
+    } catch (err) {
+      setSnackbar({ open: true, message: 'Failed to download assets', severity: 'error' });
+    }
+  };
+
+  const handleFavorite = async (assetId: number) => {
+    try {
+      await toggleFavorite(assetId);
+      const asset = assets.find(a => a.id === assetId);
+      setSnackbar({
+        open: true,
+        message: asset?.is_favorite ? 'Removed from favorites' : 'Added to favorites',
+        severity: 'success',
+      });
+    } catch (err) {
+      setSnackbar({ open: true, message: 'Failed to update favorite', severity: 'error' });
+    }
+  };
+
+  const handleDelete = async (assetId: number) => {
+    if (!window.confirm('Are you sure you want to delete this asset?')) return;
+    try {
+      await deleteAsset(assetId);
+      setSnackbar({ open: true, message: 'Asset deleted', severity: 'success' });
+    } catch (err) {
+      setSnackbar({ open: true, message: 'Failed to delete asset', severity: 'error' });
+    }
+  };
+
+  const handleDownload = async (asset: ContentAsset) => {
+    try {
+      await trackUsage(asset.id, 'download');
+      window.open(asset.file_url, '_blank');
+    } catch (err) {
+      console.error('Error downloading:', err);
+    }
+  };
+
+  const handleShare = async (asset: ContentAsset) => {
+    try {
+      await trackUsage(asset.id, 'share');
+      if (navigator.share) {
+        await navigator.share({
+          title: asset.title || asset.filename,
+          text: asset.description,
+          url: asset.file_url,
+        });
+      } else {
+        await navigator.clipboard.writeText(asset.file_url);
+        setSnackbar({ open: true, message: 'Link copied to clipboard', severity: 'success' });
+      }
+    } catch (err) {
+      console.error('Error sharing:', err);
+    }
+  };
+
+  const handleMenuOpen = (assetId: number, event: React.MouseEvent<HTMLElement>) => {
+    setAnchorEl({ ...anchorEl, [assetId]: event.currentTarget });
+  };
+
+  const handleMenuClose = (assetId: number) => {
+    setAnchorEl({ ...anchorEl, [assetId]: null });
+  };
+
+  const handleOpenBlogAsset = async (asset: ContentAsset) => {
+    navigate('/blog-writer', { state: { restoreBlogAssetId: asset.id } });
+  };
+
+  const handleRestoreResearchProject = async (asset: ContentAsset) => {
+    try {
+      const projectId = asset.asset_metadata?.project_id;
+      if (!projectId) {
+        setSnackbar({ open: true, message: 'Project ID not found', severity: 'error' });
+        return;
+      }
+
+      const project = await intentResearchApi.getResearchProject(projectId);
+      
+      if (!project) {
+        setSnackbar({ open: true, message: 'Project not found', severity: 'error' });
+        return;
+      }
+
+      localStorage.setItem('alwrity_research_project_id', projectId);
+      navigate('/research-dashboard');
+      setSnackbar({ open: true, message: 'Research project restored', severity: 'success' });
+    } catch (error) {
+      console.error('[AssetLibrary] Error restoring research project:', error);
+      setSnackbar({ open: true, message: 'Failed to restore research project', severity: 'error' });
+    }
+  };
+
+  // Fetch text content for text assets
+  const fetchTextContent = async (asset: ContentAsset) => {
+    if (asset.asset_type !== 'text' || textPreviews[asset.id]) return;
+    
+    setTextPreviews(prev => ({ ...prev, [asset.id]: { content: '', loading: true, expanded: false } }));
+    
+    try {
+      const token = await (window as any).Clerk?.session?.getToken();
+      const headers: HeadersInit = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      
+      const response = await fetch(`${API_BASE_URL}/api/content-assets/${asset.id}/content`, { headers });
+      if (response.ok) {
+        const data = await response.json();
+        const content = data.content || '';
+        setTextPreviews(prev => ({ ...prev, [asset.id]: { content, loading: false, expanded: false } }));
+      } else {
+        throw new Error('Failed to fetch text content');
+      }
+    } catch (error) {
+      console.error('Error fetching text content:', error);
+      setTextPreviews(prev => ({ 
+        ...prev, 
+        [asset.id]: { content: 'Failed to load content', loading: false, expanded: false } 
+      }));
+    }
+  };
+
+  const toggleTextPreview = (asset: ContentAsset) => {
+    if (asset.asset_type !== 'text') return;
+    
+    if (!textPreviews[asset.id]) {
+      fetchTextContent(asset);
+    } else {
+      setTextPreviews(prev => ({
+        ...prev,
+        [asset.id]: { ...prev[asset.id], expanded: !prev[asset.id].expanded }
+      }));
+    }
+  };
+
+  const filteredAssets = useMemo(() => {
+    let filtered = assets;
+    
+    if (statusFilter !== 'all') {
+      filtered = filtered.filter(a => (a.asset_metadata?.status || 'completed') === statusFilter);
+    }
+    
+    if (dateFilter) {
+      const filterDate = new Date(dateFilter);
+      filtered = filtered.filter(a => {
+        const assetDate = new Date(a.created_at);
+        return assetDate.toDateString() === filterDate.toDateString();
+      });
+    }
+    
+    return filtered;
+  }, [assets, statusFilter, dateFilter]);
+
+  return (
+    <ImageStudioLayout headerProps={headerProps}>
+      <Paper
+        elevation={0}
+        sx={{
+          maxWidth: 1600,
+          mx: 'auto',
+          borderRadius: 4,
+          border: '1px solid rgba(255,255,255,0.08)',
+          background: 'rgba(15,23,42,0.72)',
+          p: { xs: 3, md: 4 },
+          backdropFilter: 'blur(25px)',
+        }}
+      >
+        <Stack spacing={3}>
+          {/* Header */}
+          <Stack direction="row" spacing={2} alignItems="center" justifyContent="space-between">
+            <Stack direction="row" spacing={2} alignItems="center">
+              <Typography
+                variant="h3"
+                fontWeight={800}
+                sx={{
+                  background: 'linear-gradient(120deg,#ede9fe,#c7d2fe)',
+                  WebkitBackgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                }}
+              >
+                {urlSourceModule === 'blog_writer' ? 'Blog Posts' : 'Asset Library'}
+              </Typography>
+              <Tooltip
+                title="Unified content archive for all ALwrity tools: Story Studio, Image Studio, Blog Writer, LinkedIn, Facebook, SEO Tools, and more. Your outputs are stored permanently. Download and organize them for easy access across all your projects."
+                arrow
+                placement="bottom-start"
+              >
+                <InfoOutlined sx={{ color: 'rgba(255,255,255,0.4)', fontSize: 20, cursor: 'help' }} />
+              </Tooltip>
+            </Stack>
+
+            {/* Context-aware navigation for blog_writer source */}
+            {urlSourceModule === 'blog_writer' && (
+              <Stack direction="row" spacing={1.5} alignItems="center">
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<ArrowBack />}
+                  onClick={() => navigate('/blog-writer')}
+                  sx={{
+                    color: '#c7d2fe',
+                    borderColor: 'rgba(99,102,241,0.4)',
+                    textTransform: 'none',
+                    '&:hover': {
+                      borderColor: 'rgba(99,102,241,0.8)',
+                      background: 'rgba(99,102,241,0.1)',
+                    },
+                  }}
+                >
+                  Back to Blog Writer
+                </Button>
+                <Button
+                  variant="contained"
+                  size="small"
+                  startIcon={<Add />}
+                  onClick={() => navigate('/blog-writer?new=true')}
+                  sx={{
+                    background: 'linear-gradient(135deg, #2563eb 0%, #3b82f6 100%)',
+                    textTransform: 'none',
+                    '&:hover': {
+                      background: 'linear-gradient(135deg, #1d4ed8 0%, #2563eb 100%)',
+                    },
+                  }}
+                >
+                  New Blog
+                </Button>
+              </Stack>
+            )}
+          </Stack>
+
+          <Divider sx={{ borderColor: 'rgba(255,255,255,0.08)' }} />
+
+          {/* Advanced Search and Filters */}
+          <AssetFiltersComponent
+            idSearch={idSearch}
+            setIdSearch={setIdSearch}
+            modelSearch={modelSearch}
+            setModelSearch={setModelSearch}
+            dateFilter={dateFilter}
+            setDateFilter={setDateFilter}
+            statusFilter={statusFilter}
+            setStatusFilter={setStatusFilter}
+            filterType={filterType}
+            setFilterType={setFilterType}
+            searchQuery={searchQuery}
+            setSearchQuery={setSearchQuery}
+            onSearch={onSearch}
+          />
+
+          {/* Bulk Actions */}
+          {selectedAssets.size > 0 && (
+            <Box
+              sx={{
+                display: 'flex',
+                gap: 2,
+                alignItems: 'center',
+                p: 2,
+                background: 'rgba(99,102,241,0.1)',
+                borderRadius: 2,
+                border: '1px solid rgba(99,102,241,0.3)',
+              }}
+            >
+              <Typography variant="body2" sx={{ color: '#c7d2fe' }}>
+                {selectedAssets.size} selected
+              </Typography>
+              <Button
+                size="small"
+                variant="contained"
+                startIcon={<Download />}
+                onClick={handleBulkDownload}
+                sx={{
+                  background: 'rgba(59,130,246,0.3)',
+                  '&:hover': { background: 'rgba(59,130,246,0.5)' },
+                }}
+              >
+                Download
+              </Button>
+              <Button
+                size="small"
+                variant="contained"
+                startIcon={<Delete />}
+                onClick={handleBulkDelete}
+                sx={{
+                  background: 'rgba(239,68,68,0.3)',
+                  '&:hover': { background: 'rgba(239,68,68,0.5)' },
+                }}
+              >
+                Delete
+              </Button>
+              <Button
+                size="small"
+                variant="outlined"
+                onClick={() => setSelectedAssets(new Set())}
+                sx={{ ml: 'auto', color: 'rgba(255,255,255,0.6)' }}
+              >
+                Clear
+              </Button>
+            </Box>
+          )}
+
+          {/* Action Buttons */}
+          <Stack direction="row" spacing={2} alignItems="center">
+            <Button
+              variant="contained"
+              startIcon={<Download />}
+              onClick={handleBulkDownload}
+              disabled={selectedAssets.size === 0}
+              sx={{
+                background: 'linear-gradient(90deg,#3b82f6,#2563eb)',
+                textTransform: 'none',
+              }}
+            >
+              Download
+            </Button>
+            <Button
+              variant="contained"
+              startIcon={<Delete />}
+              onClick={handleBulkDelete}
+              disabled={selectedAssets.size === 0}
+              sx={{
+                background: 'linear-gradient(90deg,#ef4444,#dc2626)',
+                textTransform: 'none',
+              }}
+            >
+              Delete
+            </Button>
+            <Button
+              variant="outlined"
+              startIcon={<Refresh />}
+              onClick={() => {
+                refetch();
+                setIdSearch('');
+                setModelSearch('');
+                setDateFilter('');
+                setStatusFilter('all');
+                setFilterType('all');
+                setSelectedAssets(new Set());
+              }}
+              sx={{ ml: 'auto', textTransform: 'none' }}
+            >
+              Reset
+            </Button>
+            <Button
+              variant="contained"
+              startIcon={<Search />}
+              onClick={() => refetch()}
+              sx={{
+                background: 'linear-gradient(90deg,#6366f1,#4f46e5)',
+                textTransform: 'none',
+              }}
+            >
+              Search
+            </Button>
+            <ButtonGroup>
+              <Button
+                variant={viewMode === 'grid' ? 'contained' : 'outlined'}
+                onClick={() => setViewMode('grid')}
+                startIcon={<GridView />}
+                size="small"
+              >
+                Grid
+              </Button>
+              <Button
+                variant={viewMode === 'list' ? 'contained' : 'outlined'}
+                onClick={() => setViewMode('list')}
+                startIcon={<ViewList />}
+                size="small"
+              >
+                List
+              </Button>
+            </ButtonGroup>
+          </Stack>
+
+          {/* Tabs */}
+          <Box sx={{ borderBottom: 1, borderColor: 'rgba(255,255,255,0.08)' }}>
+            <Tabs value={tabValue} onChange={handleTabChange} sx={{ '& .MuiTab-root': { color: 'rgba(255,255,255,0.6)' } }}>
+              <Tab icon={<Collections />} iconPosition="start" label="All Assets" />
+              <Tab icon={<Favorite />} iconPosition="start" label="Favorites" />
+              <Tab icon={<History />} iconPosition="start" label="Recent" />
+              <Tab icon={<Star />} iconPosition="start" label="Collections" />
+            </Tabs>
+          </Box>
+
+          {/* Content */}
+          {loading ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 8 }}>
+              <CircularProgress />
+            </Box>
+          ) : error ? (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {error}
+            </Alert>
+          ) : filteredAssets.length === 0 ? (
+            <Box
+              sx={{
+                textAlign: 'center',
+                py: 8,
+                color: 'rgba(255,255,255,0.5)',
+              }}
+            >
+              <ImageIcon sx={{ fontSize: 64, mb: 2, opacity: 0.3 }} />
+              <Typography variant="h6" gutterBottom>
+                No assets found
+              </Typography>
+              <Typography variant="body2">
+                {urlSourceModule === 'blog_writer'
+                  ? 'No blog posts found. Generate your first blog post in Blog Writer.'
+                  : urlSourceModule === 'research_tools'
+                  ? 'No research documents found. Start a new research project.'
+                  : urlSourceModule === 'product_marketing'
+                  ? 'No marketing assets found. Create one in Product Marketing.'
+                  : 'Generated content from all ALwrity tools will appear here.'}
+              </Typography>
+            </Box>
+          ) : viewMode === 'list' ? (
+            <TableContainer>
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableCell padding="checkbox">
+                      <Checkbox
+                        checked={selectedAssets.size === filteredAssets.length && filteredAssets.length > 0}
+                        indeterminate={selectedAssets.size > 0 && selectedAssets.size < filteredAssets.length}
+                        onChange={e => handleSelectAll(e.target.checked)}
+                        sx={{ color: 'rgba(255,255,255,0.6)' }}
+                      />
+                    </TableCell>
+                    <TableCell sx={{ color: 'rgba(255,255,255,0.7)', fontWeight: 600 }}>ID</TableCell>
+                    <TableCell sx={{ color: 'rgba(255,255,255,0.7)', fontWeight: 600 }}>Model</TableCell>
+                    <TableCell sx={{ color: 'rgba(255,255,255,0.7)', fontWeight: 600 }}>Status</TableCell>
+                    <TableCell sx={{ color: 'rgba(255,255,255,0.7)', fontWeight: 600 }}>Outputs</TableCell>
+                    <TableCell sx={{ color: 'rgba(255,255,255,0.7)', fontWeight: 600 }}>Created</TableCell>
+                    <TableCell sx={{ color: 'rgba(255,255,255,0.7)', fontWeight: 600 }}>Action</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {filteredAssets.map(asset => (
+                    <AssetTableRow
+                      key={asset.id}
+                      asset={asset}
+                      isSelected={selectedAssets.has(asset.id)}
+                      onSelect={(checked) => handleSelectAsset(asset.id, checked)}
+                      onDownload={handleDownload}
+                      onShare={handleShare}
+                      onDelete={handleDelete}
+                      onFavorite={handleFavorite}
+                      onRestore={handleRestoreResearchProject}
+                      onMenuOpen={handleMenuOpen}
+                      onMenuClose={handleMenuClose}
+                      anchorEl={anchorEl[asset.id]}
+                      textPreview={textPreviews[asset.id]}
+                      onToggleTextPreview={toggleTextPreview}
+                      onCopyId={(id) => {
+                        navigator.clipboard.writeText(id);
+                        setSnackbar({ open: true, message: 'ID copied', severity: 'success' });
+                      }}
+                    />
+                  ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          ) : (
+            <Grid container spacing={3}>
+              {filteredAssets.map(asset => (
+                <Grid item xs={12} sm={6} md={4} lg={3} key={asset.id}>
+                  <AssetCard
+                    asset={asset}
+                    textPreview={textPreviews[asset.id]}
+                    onToggleTextPreview={toggleTextPreview}
+                    onFavorite={handleFavorite}
+                    onDownload={handleDownload}
+                    onShare={handleShare}
+                    onDelete={handleDelete}
+                    onRestore={handleRestoreResearchProject}
+                    onOpenBlogAsset={handleOpenBlogAsset}
+                  />
+                </Grid>
+              ))}
+            </Grid>
+          )}
+
+          {/* Pagination */}
+          {total > pageSize && (
+            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 4, gap: 2, alignItems: 'center' }}>
+              <Button
+                disabled={page === 0}
+                onClick={() => setPage(p => Math.max(0, p - 1))}
+                sx={{ color: 'rgba(255,255,255,0.8)' }}
+              >
+                Previous
+              </Button>
+              <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.6)' }}>
+                Page {page + 1} of {Math.ceil(total / pageSize)} ({total} total)
+              </Typography>
+              <Button
+                disabled={(page + 1) * pageSize >= total}
+                onClick={() => setPage(p => p + 1)}
+                sx={{ color: 'rgba(255,255,255,0.8)' }}
+              >
+                Next
+              </Button>
+            </Box>
+          )}
+
+          <Snackbar
+            open={snackbar.open}
+            autoHideDuration={3000}
+            onClose={() => setSnackbar({ ...snackbar, open: false })}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+          >
+            <Alert severity={snackbar.severity} onClose={() => setSnackbar({ ...snackbar, open: false })}>
+              {snackbar.message}
+            </Alert>
+          </Snackbar>
+        </Stack>
+      </Paper>
+    </ImageStudioLayout>
+  );
+};

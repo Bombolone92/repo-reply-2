@@ -1,0 +1,48 @@
+# ALwrity Backend Configuration
+
+# API Keys (Configure these in the onboarding process)
+# OPENAI_API_KEY=your_openai_api_key_here
+GEMINI_API_KEY=your_gemini_api_key_here
+# ANTHROPIC_API_KEY=your_anthropic_api_key_here
+# MISTRAL_API_KEY=your_mistral_api_key_here
+
+# Research API Keys (Optional)
+# TAVILY_API_KEY=your_tavily_api_key_here
+# SERPER_API_KEY=your_serper_api_key_here
+EXA_API_KEY=your_exa_api_key_here
+# SERPBASE_API_KEY=your_serpbase_api_key_here  # optional Google SERP provider (https://serpbase.dev)
+# SERPBASE_BASE_URL=https://api.serpbase.dev/google/search  # optional override for tests/proxies
+
+# Authentication
+# CLERK_SECRET_KEY=your_clerk_secret_key_here
+
+# Frontend URL for OAuth callbacks
+FRONTEND_URL=https://alwrity-ai.vercel.app
+# Optional comma-separated allowlist of trusted frontend origins used for OAuth callback postMessage targetOrigin.
+# If unset, FRONTEND_URL origin is used.
+# Example: OAUTH_CALLBACK_ALLOWED_ORIGINS=https://alwrity-ai.vercel.app,http://localhost:3000
+OAUTH_CALLBACK_ALLOWED_ORIGINS=
+
+# OAuth Token Encryption (Fernet key - generate with: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+# Used by both WordPress and Wix OAuth token encryption at rest.
+# WORDPRESS_TOKEN_ENCRYPTION_KEY and WIX_TOKEN_ENCRYPTION_KEY can override per-provider.
+OAUTH_TOKEN_ENCRYPTION_KEY=
+
+# OAuth Redirect URIs (Using environment variable for flexibility)
+GSC_REDIRECT_URI=${FRONTEND_URL}/gsc/callback
+WORDPRESS_REDIRECT_URI=${FRONTEND_URL}/wp/callback
+WIX_REDIRECT_URI=${FRONTEND_URL}/wix/callback
+BING_REDIRECT_URI=${FRONTEND_URL}/bing/callback
+
+# Bing Webmaster OAuth Credentials
+# Get these from: https://www.bing.com/webmasters/ > Settings > API Access
+BING_CLIENT_ID=your_bing_client_id_here
+BING_CLIENT_SECRET=your_bing_client_secret_here
+
+# Server Configuration
+HOST=0.0.0.0
+PORT=8000
+DEBUG=true
+
+# Logging
+LOG_LEVEL=INFO

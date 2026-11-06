@@ -1,0 +1,1320 @@
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  Box,
+  Typography,
+  TextField,
+  Alert,
+  Snackbar,
+  Dialog,
+} from '@mui/material';
+import GlobalStyles from '@mui/material/GlobalStyles';
+import { motion } from 'framer-motion';
+import { useStoryWriterState, SceneAnimationResume } from '../../../hooks/useStoryWriterState';
+import { storyWriterApi } from '../../../services/storyWriterApi';
+import { aiApiClient, triggerSubscriptionError } from '../../../api/client';
+import EditSectionModal from './StoryOutlineParts/EditSectionModal';
+import BookPages from './StoryOutlineParts/BookPages';
+import OutlineActionsBar from './StoryOutlineParts/OutlineActionsBar';
+import ImageEditModal from './StoryOutlineParts/ImageEditModal';
+import AudioScriptModal from './StoryOutlineParts/AudioScriptModal';
+import CharactersModal from './StoryOutlineParts/CharactersModal';
+import KeyEventsModal from './StoryOutlineParts/KeyEventsModal';
+import TitleEditModal from './StoryOutlineParts/TitleEditModal';
+import {
+  StoryImageGenerationModal,
+  StoryImageGenerationSettings,
+} from '../components/StoryImageGenerationModal';
+
+// styles imported
+
+interface StoryOutlineProps {
+  state: ReturnType<typeof useStoryWriterState>;
+  onNext: () => void;
+}
+
+const StoryOutline: React.FC<StoryOutlineProps> = ({ state, onNext }) => {
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isGeneratingImages, setIsGeneratingImages] = useState(false);
+  const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [currentSceneIndex, setCurrentSceneIndex] = useState(0);
+  const [pageDirection, setPageDirection] = useState(0);
+  const [imageLoadError, setImageLoadError] = useState<Set<number>>(new Set());
+  const [imageBlobUrls, setImageBlobUrls] = useState<Map<number, string>>(new Map());
+  const [audioBlobUrls, setAudioBlobUrls] = useState<Map<number, string>>(new Map());
+  const [videoBlobUrls, setVideoBlobUrls] = useState<Map<number, string>>(new Map());
+  const [audioLoadError, setAudioLoadError] = useState<Set<number>>(new Set());
+  const [hasVideoLoadError, setVideoLoadError] = useState<Set<number>>(new Set());
+  const [outlineToastOpen, setOutlineToastOpen] = useState(false);
+  const lastToastSceneCount = useRef<number | null>(null);
+  const lastSavedSceneCount = useRef<number | null>(null);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [editText, setEditText] = useState<string>('');
+  const [aiFeedback, setAiFeedback] = useState<string>('');
+  const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
+  const [aiLoading, setAiLoading] = useState<boolean>(false);
+  const [isRegeneratingSceneImage, setIsRegeneratingSceneImage] = useState<boolean>(false);
+  const [isRegeneratingSceneAudio, setIsRegeneratingSceneAudio] = useState<boolean>(false);
+  const [isImageModalOpen, setIsImageModalOpen] = useState(false);
+  const [imagePromptDraft, setImagePromptDraft] = useState('');
+  const [isImageSettingsModalOpen, setIsImageSettingsModalOpen] = useState(false);
+  const [isImageSettingsGenerating, setIsImageSettingsGenerating] = useState(false);
+  const [isAudioModalOpen, setIsAudioModalOpen] = useState(false);
+  const [audioScriptDraft, setAudioScriptDraft] = useState('');
+  const [isCharactersModalOpen, setIsCharactersModalOpen] = useState(false);
+  const [isKeyEventsModalOpen, setIsKeyEventsModalOpen] = useState(false);
+  const [isTitleModalOpen, setIsTitleModalOpen] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const [animatingSceneNumber, setAnimatingSceneNumber] = useState<number | null>(null);
+  const [isRefiningAnimeScene, setIsRefiningAnimeScene] = useState(false);
+  const [isImageFullscreenOpen, setIsImageFullscreenOpen] = useState(false);
+  
+  // Use state from hook instead of local state
+  const sceneImages = state.sceneImages || new Map<number, string>();
+  const sceneAudio = state.sceneAudio || new Map<number, string>();
+  const sceneAnimatedVideos = React.useMemo(() => state.sceneAnimatedVideos || new Map<number, string>(), [state.sceneAnimatedVideos]);
+  const sceneAnimationResumables = state.sceneAnimationResumables || new Map<number, SceneAnimationResume>();
+
+  const updateSceneAnimatedVideo = (sceneNumber: number, videoUrl: string) => {
+    const nextMap = new Map(state.sceneAnimatedVideos || []);
+    nextMap.set(sceneNumber, videoUrl);
+    state.setSceneAnimatedVideos(nextMap);
+    // Clear the blob URL for this scene so it reloads with the new video
+    setVideoBlobUrls((prev) => {
+      const next = new Map(prev);
+      const oldBlobUrl = next.get(sceneNumber);
+      if (oldBlobUrl) {
+        URL.revokeObjectURL(oldBlobUrl);
+      }
+      next.delete(sceneNumber);
+      return next;
+    });
+    // Clear any error state for this scene
+    setVideoLoadError((prev) => {
+      const next = new Set(prev);
+      next.delete(sceneNumber);
+      return next;
+    });
+  };
+
+  const handleAnimateSceneWithVoiceover = async () => {
+    if (!hasScenes || !currentScene) {
+      setError('Please generate your outline before animating scenes.');
+      return;
+    }
+
+    const sceneNumber = currentScene.scene_number || currentSceneIndex + 1;
+    const sceneImageRelativeUrl = state.sceneImages?.get(sceneNumber);
+    const sceneAudioRelativeUrl = state.sceneAudio?.get(sceneNumber);
+
+    if (!sceneImageRelativeUrl) {
+      setError('Please generate an image for this scene before animating it.');
+      return;
+    }
+
+    if (!sceneAudioRelativeUrl) {
+      setError('Please generate narration audio for this scene before animating with voiceover.');
+      return;
+    }
+
+    setAnimatingSceneNumber(sceneNumber);
+    setError(null);
+    updateSceneAnimationResume(sceneNumber, undefined);
+
+    const storyContextPayload = createStoryContextPayload();
+
+    try {
+      console.info('[Outline] Animate scene with voiceover requested', {
+        sceneNumber,
+        image: sceneImageRelativeUrl,
+        audio: sceneAudioRelativeUrl,
+      });
+
+      // Start async task
+      const startResponse = await storyWriterApi.animateSceneVoiceover({
+        scene_number: sceneNumber,
+        scene_data: currentScene,
+        story_context: storyContextPayload,
+        image_url: sceneImageRelativeUrl,
+        audio_url: sceneAudioRelativeUrl,
+        resolution: '720p',
+      });
+
+      // Poll for completion (InfiniteTalk can take up to 10 minutes)
+      const taskId = startResponse.task_id;
+      let done = false;
+      while (!done) {
+        await new Promise((r) => setTimeout(r, 2000)); // Poll every 2 seconds
+        const status = await storyWriterApi.getTaskStatus(taskId);
+        if (status.status === 'completed') {
+          done = true;
+          const result = await storyWriterApi.getTaskResult(taskId);
+          // Extract AnimateSceneResponse from result
+          // The result can be either the AnimateSceneResponse directly or wrapped in a result field
+          const animationResult = (result as any).result || result;
+          const videoUrl = animationResult.video_url;
+          const cost = animationResult.cost || 0;
+          if (videoUrl) {
+            updateSceneAnimatedVideo(sceneNumber, videoUrl);
+            console.info('[Outline] Animate with voiceover completed', {
+              sceneNumber,
+              video: videoUrl,
+              cost: cost,
+            });
+          } else {
+            throw new Error('Video URL not found in result');
+          }
+        } else if (status.status === 'failed') {
+          throw new Error(status.error || 'InfiniteTalk animation failed');
+        }
+        // Continue polling if status is 'pending' or 'processing'
+      }
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      const handled = await triggerSubscriptionError(err);
+      const message = extractDetailMessage(detail, err.message || 'Failed to animate scene with voiceover.');
+      setError(message);
+      if (!handled) {
+        console.error('[Outline] Animate scene with voiceover failed', err);
+      }
+    } finally {
+      setAnimatingSceneNumber(null);
+    }
+  };
+
+  const updateSceneAnimationResume = (sceneNumber: number, info?: SceneAnimationResume) => {
+    const prevMap = state.sceneAnimationResumables || new Map<number, SceneAnimationResume>();
+    const nextMap = new Map(prevMap);
+    if (info) {
+      nextMap.set(sceneNumber, info);
+    } else {
+      nextMap.delete(sceneNumber);
+    }
+    state.setSceneAnimationResumables(nextMap.size > 0 ? nextMap : null);
+  };
+
+  const extractDetailMessage = (detail: any, fallback: string): string => {
+    if (!detail) return fallback;
+    if (typeof detail === 'string') return detail;
+    if (typeof detail === 'object') {
+      if (typeof detail.message === 'string') return detail.message;
+      if (typeof detail.error === 'string') return detail.error;
+      if (typeof detail.detail === 'string') return detail.detail;
+    }
+    return fallback;
+  };
+
+  const captureResumeOpportunity = (
+    sceneNumber: number,
+    duration: 5 | 10,
+    detail: any
+  ): string | null => {
+    if (!detail || typeof detail !== 'object') {
+      return null;
+    }
+    if (!detail.resume_available || !detail.prediction_id) {
+      return null;
+    }
+    const message =
+      typeof detail.message === 'string'
+        ? detail.message
+        : typeof detail.error === 'string'
+        ? detail.error
+        : 'WaveSpeed is still finalizing this animation. Click Resume to download without extra cost.';
+
+    updateSceneAnimationResume(sceneNumber, {
+      predictionId: detail.prediction_id,
+      duration,
+      message,
+      createdAt: new Date().toISOString(),
+    });
+    return message;
+  };
+
+  const scenes = state.outlineScenes || [];
+  const sceneCount = scenes.length;
+  const hasScenes = state.isOutlineStructured && scenes.length > 0;
+  const hasOutlineScenes = Boolean(state.outlineScenes && state.outlineScenes.length > 0);
+  const hasAnimeBible = Boolean(state.animeBible);
+  const resumableScenesArray = Array.from(sceneAnimationResumables.entries());
+  const resumableSummaryMessage =
+    resumableScenesArray.length === 0
+      ? null
+      : resumableScenesArray.length === 1
+      ? resumableScenesArray[0][1]?.message ||
+        `Scene ${resumableScenesArray[0][0]} animation is ready to resume without extra cost.`
+      : `Scenes ${resumableScenesArray.map(([scene]) => scene).join(', ')} have WaveSpeed animations ready to resume without extra cost. Open each scene and click Resume Animation.`;
+
+  // removed old accordion renderer (unused)
+
+  useEffect(() => {
+    if (state.isOutlineStructured && sceneCount > 0 && sceneCount !== lastToastSceneCount.current) {
+      setOutlineToastOpen(true);
+      lastToastSceneCount.current = sceneCount;
+    }
+  }, [state.isOutlineStructured, sceneCount]);
+
+  useEffect(() => {
+    if (!state.projectId) {
+      return;
+    }
+    if (!state.isOutlineStructured || sceneCount <= 0) {
+      return;
+    }
+    if (lastSavedSceneCount.current === sceneCount) {
+      return;
+    }
+    lastSavedSceneCount.current = sceneCount;
+    state.saveProjectToDb();
+  }, [state.projectId, state.isOutlineStructured, sceneCount, state.saveProjectToDb, state]);
+
+  useEffect(() => {
+    if (hasScenes) {
+      setCurrentSceneIndex(0);
+      setPageDirection(0);
+    }
+  }, [hasScenes]);
+
+  const currentScene = hasScenes ? scenes[currentSceneIndex] : null;
+  const canGoPrev = currentSceneIndex > 0;
+  const canGoNext = hasScenes ? currentSceneIndex < scenes.length - 1 : false;
+  
+  // Get the current scene's image URL
+  const currentSceneNumber = currentScene?.scene_number || currentSceneIndex + 1;
+  const currentSceneResumeInfo = sceneAnimationResumables.get(currentSceneNumber) || null;
+  const canAnimateCurrentScene = !animatingSceneNumber && !currentSceneResumeInfo;
+  const isCurrentSceneAnimating = animatingSceneNumber === currentSceneNumber;
+  const currentSceneImageUrl = sceneImages.get(currentSceneNumber);
+  const hasImageLoadError = imageLoadError.has(currentSceneNumber);
+  const currentSceneAudioUrl = sceneAudio.get(currentSceneNumber);
+  const hasAudioLoadError = audioLoadError.has(currentSceneNumber);
+  const hasAudioForScene = Boolean(currentSceneAudioUrl);
+  
+  // Fetch image as blob with authentication
+  useEffect(() => {
+    if (!currentSceneImageUrl || hasImageLoadError || imageBlobUrls.has(currentSceneNumber)) {
+      return;
+    }
+    
+    const loadImage = async () => {
+      try {
+        // Remove query parameters (token) from URL if present, we'll use authenticated request instead
+        const cleanUrl = currentSceneImageUrl.split('?')[0];
+        // Use relative URL path directly (aiApiClient will add base URL and auth)
+        const imageUrl = cleanUrl.startsWith('/') 
+          ? cleanUrl 
+          : `/${cleanUrl}`;
+        // Use aiApiClient to get authenticated response with blob
+        const response = await aiApiClient.get(imageUrl, {
+          responseType: 'blob',
+        });
+        
+        const blob = response.data;
+        const blobUrl = URL.createObjectURL(blob);
+        
+        setImageBlobUrls((prev) => {
+          const next = new Map(prev);
+          next.set(currentSceneNumber, blobUrl);
+          return next;
+        });
+      } catch (err: any) {
+        // Only log non-404 errors (404 means file doesn't exist, which is acceptable)
+        if (err?.response?.status !== 404) {
+          console.error('Failed to load image:', err);
+        }
+        // Mark as error to prevent retries
+        setImageLoadError((prev) => new Set(prev).add(currentSceneNumber));
+      }
+    };
+    
+    loadImage();
+  }, [currentSceneNumber, currentSceneImageUrl, hasImageLoadError, imageBlobUrls]);
+  
+  // Fetch video as blob with authentication
+  useEffect(() => {
+    const animatedVideoRelativeUrl = sceneAnimatedVideos.get(currentSceneNumber);
+    if (!animatedVideoRelativeUrl || hasVideoLoadError.has(currentSceneNumber) || videoBlobUrls.has(currentSceneNumber)) {
+      return;
+    }
+    
+    const loadVideo = async () => {
+      try {
+        // Remove query parameters (token) from URL if present, we'll use authenticated request instead
+        const cleanUrl = animatedVideoRelativeUrl.split('?')[0];
+        // Use relative URL path directly (aiApiClient will add base URL and auth)
+        const videoUrl = cleanUrl.startsWith('/') 
+          ? cleanUrl 
+          : `/${cleanUrl}`;
+        // Use aiApiClient to get authenticated response with blob
+        const response = await aiApiClient.get(videoUrl, {
+          responseType: 'blob',
+        });
+        
+        const blob = response.data;
+        const blobUrl = URL.createObjectURL(blob);
+        
+        setVideoBlobUrls((prev) => {
+          const next = new Map(prev);
+          next.set(currentSceneNumber, blobUrl);
+          return next;
+        });
+      } catch (err: any) {
+        // Only log non-404 errors (404 means file doesn't exist, which is acceptable)
+        if (err?.response?.status !== 404) {
+          console.error('Failed to load video:', err);
+        }
+        // Mark as error to prevent retries
+        setVideoLoadError((prev) => new Set(prev).add(currentSceneNumber));
+      }
+    };
+    
+    loadVideo();
+  }, [currentSceneNumber, sceneAnimatedVideos, hasVideoLoadError, videoBlobUrls, audioBlobUrls, imageBlobUrls]);
+
+  // Cleanup blob URLs when component unmounts or scenes change
+  useEffect(() => {
+    return () => {
+      // Revoke all blob URLs on unmount
+      imageBlobUrls.forEach((blobUrl) => {
+        URL.revokeObjectURL(blobUrl);
+      });
+      audioBlobUrls.forEach((blobUrl) => {
+        URL.revokeObjectURL(blobUrl);
+      });
+      videoBlobUrls.forEach((blobUrl) => {
+        URL.revokeObjectURL(blobUrl);
+      });
+    };
+  }, []);
+  
+  const currentSceneImageFullUrl = imageBlobUrls.get(currentSceneNumber) || null;
+  const currentSceneAudioFullUrl = audioBlobUrls.get(currentSceneNumber) || null;
+  const resolvedSceneAudioUrl =
+    currentSceneAudioFullUrl ||
+    (currentSceneAudioUrl ? storyWriterApi.getAudioUrl(currentSceneAudioUrl) : null);
+  const currentSceneAnimatedVideoUrl = videoBlobUrls.get(currentSceneNumber) || null;
+  
+  const createStoryContextPayload = () => ({
+    persona: state.persona,
+    story_setting: state.storySetting,
+    characters: state.characters,
+    plot_elements: state.plotElements,
+    writing_style: state.writingStyle,
+    story_tone: state.storyTone,
+    narrative_pov: state.narrativePOV,
+    audience_age_group: state.audienceAgeGroup,
+    content_rating: state.contentRating,
+    story_length: state.storyLength,
+    premise: state.premise,
+    outline: state.outline,
+    story_content: state.storyContent,
+    anime_bible: state.animeBible,
+  });
+
+  // Reset image/audio/video load errors when scene changes (to allow retry for new scene)
+  useEffect(() => {
+    setImageLoadError((prev) => {
+      const next = new Set(prev);
+      next.delete(currentSceneNumber);
+      return next;
+    });
+    setAudioLoadError((prev) => {
+      const next = new Set(prev);
+      next.delete(currentSceneNumber);
+      return next;
+    });
+    setVideoLoadError((prev) => {
+      const next = new Set(prev);
+      next.delete(currentSceneNumber);
+      return next;
+    });
+  }, [currentSceneNumber]);
+
+  useEffect(() => {
+    if (state.enableNarration) {
+      return;
+    }
+    setAudioBlobUrls((prev) => {
+      prev.forEach((url) => URL.revokeObjectURL(url));
+      return new Map();
+    });
+    setAudioLoadError(new Set());
+  }, [state.enableNarration]);
+
+  // Fetch audio as blob for current scene
+  useEffect(() => {
+    if (!state.enableNarration) {
+      return;
+    }
+    if (!currentSceneAudioUrl || !sceneAudio.has(currentSceneNumber)) {
+      return;
+    }
+    if (currentSceneAudioFullUrl || hasAudioLoadError) {
+      return;
+    }
+
+    const loadAudio = async () => {
+      try {
+        // Remove query parameters (token) from URL if present, we'll use authenticated request instead
+        const cleanUrl = currentSceneAudioUrl.split('?')[0];
+        // Normalize path - ensure it starts with /api/story/audio/
+        let audioPath = cleanUrl.startsWith('/')
+          ? cleanUrl
+          : `/${cleanUrl}`;
+        
+        // If path doesn't include /api/story/audio/, add it
+        if (!audioPath.includes('/api/story/audio/')) {
+          // Extract filename from path
+          const filename = cleanUrl.split('/').pop() || cleanUrl;
+          audioPath = `/api/story/audio/${filename}`;
+        }
+        
+        const response = await aiApiClient.get(audioPath, {
+          responseType: 'blob',
+        });
+        const blob = response.data;
+        const blobUrl = URL.createObjectURL(blob);
+
+        setAudioBlobUrls((prev) => {
+          const next = new Map(prev);
+          const existing = next.get(currentSceneNumber);
+          if (existing) {
+            URL.revokeObjectURL(existing);
+          }
+          next.set(currentSceneNumber, blobUrl);
+          return next;
+        });
+      } catch (err: any) {
+        // Only log non-404 errors (404 means file doesn't exist, which is acceptable)
+        if (err?.response?.status !== 404) {
+          console.error(`Failed to load audio for scene ${currentSceneNumber}:`, err);
+          console.error(`Audio URL was: ${currentSceneAudioUrl}`);
+          
+          // If auth error, log more details
+          if (err?.response?.status === 401) {
+            console.error(`Authentication failed for audio file. Make sure auth token is set.`);
+          }
+        }
+        
+        // Mark as error to prevent retries
+        setAudioLoadError((prev) => new Set(prev).add(currentSceneNumber));
+      }
+    };
+
+    loadAudio();
+  }, [currentSceneAudioUrl, currentSceneNumber, currentSceneAudioFullUrl, hasAudioLoadError, sceneAudio, state.enableNarration]);
+
+  const handlePrevScene = () => {
+    if (canGoPrev) {
+      setPageDirection(-1);
+      setCurrentSceneIndex((prev) => prev - 1);
+    }
+  };
+
+  const handleNextScene = () => {
+    if (canGoNext) {
+      setPageDirection(1);
+      setCurrentSceneIndex((prev) => prev + 1);
+    }
+  };
+
+  const openEditModal = () => {
+    setEditText(currentScene?.description || '');
+    setAiFeedback('');
+    setAiSuggestions([]);
+    setIsEditModalOpen(true);
+  };
+
+  const openImageModal = () => {
+    setImagePromptDraft(currentScene?.image_prompt || '');
+    setIsImageModalOpen(true);
+  };
+
+  const handleOpenAdvancedImageSettings = (prompt: string) => {
+    setImagePromptDraft(prompt);
+    setIsImageSettingsModalOpen(true);
+  };
+
+  const openAudioModal = () => {
+    setAudioScriptDraft(currentScene?.audio_narration || '');
+    setIsAudioModalOpen(true);
+  };
+  const openCharactersModal = () => {
+    setIsCharactersModalOpen(true);
+  };
+  const openKeyEventsModal = () => {
+    setIsKeyEventsModalOpen(true);
+  };
+  const openTitleModal = () => {
+    setTitleDraft(currentScene?.title || '');
+    setIsTitleModalOpen(true);
+  };
+
+  const handleSaveUpdatedSection = () => {
+    if (!hasScenes || !currentScene) {
+      setIsEditModalOpen(false);
+      return;
+    }
+    const updatedScenes = [...scenes];
+    const idx = currentSceneIndex;
+    const original = updatedScenes[idx];
+    updatedScenes[idx] = {
+      ...original,
+      description: editText,
+    };
+    (state.setOutlineScenes as (s: any[] | null) => void)(updatedScenes);
+    const formattedOutline = updatedScenes
+      .map((scene, idx2) => `Scene ${scene.scene_number || idx2 + 1}: ${scene.title}\n${scene.description}`)
+      .join('\n\n');
+    state.setOutline(formattedOutline);
+    setIsEditModalOpen(false);
+  };
+
+  const handleGenerateAISuggestions = async () => {
+    setAiLoading(true);
+    try {
+      const base = (editText || currentScene?.description || '').trim();
+      const suggestion1 = `${base}\n\n[Variant A] Improved pacing and clarity, preserving key events.`;
+      const suggestion2 = `${base}\n\n[Variant B] Richer sensory details and stronger character emotion.`;
+      setAiSuggestions([suggestion1, suggestion2]);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const handleGenerateImageWithSettings = async (
+    settings: StoryImageGenerationSettings,
+  ) => {
+    if (!hasScenes || !currentScene) {
+      return;
+    }
+
+    setIsImageSettingsGenerating(true);
+    try {
+      const sceneNum = currentScene.scene_number || currentSceneIndex + 1;
+      const sceneTitle = currentScene.title || `Scene ${sceneNum}`;
+
+      const resp = await storyWriterApi.regenerateSceneImage({
+        scene_number: sceneNum,
+        scene_title: sceneTitle,
+        prompt: settings.prompt.trim(),
+        provider: state.imageProvider || undefined,
+        width: state.imageWidth,
+        height: state.imageHeight,
+        model: settings.model || state.imageModel || undefined,
+      });
+
+      if (resp.success && resp.image_url) {
+        const nextMap = new Map(state.sceneImages || []);
+        nextMap.set(sceneNum, resp.image_url);
+        state.setSceneImages(nextMap);
+
+        const updated = [...scenes];
+        updated[currentSceneIndex] = {
+          ...updated[currentSceneIndex],
+          image_prompt: settings.prompt.trim(),
+        };
+        (state.setOutlineScenes as any)(updated);
+        setImagePromptDraft(settings.prompt.trim());
+        setIsImageSettingsModalOpen(false);
+        setIsImageModalOpen(false);
+      } else {
+        throw new Error(resp.error || 'Failed to regenerate image');
+      }
+    } catch (err: any) {
+      console.error('Failed to regenerate scene image with settings:', err);
+      setError(err?.message || 'Failed to regenerate scene image');
+    } finally {
+      setIsImageSettingsGenerating(false);
+    }
+  };
+
+  const applySuggestion = (index: number) => {
+    const chosen = aiSuggestions[index];
+    if (chosen) {
+      setEditText(chosen);
+    }
+  };
+
+  const handleOutlineToastClose = (_?: unknown, reason?: string) => {
+    if (reason === 'clickaway') {
+      return;
+    }
+    setOutlineToastOpen(false);
+  };
+
+  const handleGenerateOutline = async () => {
+    if (!state.premise) {
+      setError('Please generate a premise first');
+      return;
+    }
+
+    setIsGenerating(true);
+    setError(null);
+
+    try {
+      const request = state.getRequest();
+      const response = await storyWriterApi.generateOutline(state.premise, request);
+
+      if (response.anime_bible) {
+        state.setAnimeBible(response.anime_bible);
+      }
+      
+      if (response.success && response.outline) {
+        // Handle structured outline (scenes) or plain text outline
+        if (response.is_structured && Array.isArray(response.outline)) {
+          // Structured outline with scenes
+          const scenes = response.outline as any[]; // Assuming StoryScene is any[]
+          state.setOutlineScenes(scenes);
+          state.setIsOutlineStructured(true);
+          // Also store as formatted text for backward compatibility
+          const formattedOutline = scenes.map((scene, idx) => 
+            `Scene ${scene.scene_number || idx + 1}: ${scene.title}\n${scene.description}`
+          ).join('\n\n');
+          state.setOutline(formattedOutline);
+        } else {
+          // Plain text outline
+          state.setOutline(typeof response.outline === 'string' ? response.outline : String(response.outline));
+          state.setOutlineScenes(null);
+          state.setIsOutlineStructured(false);
+        }
+        state.setError(null);
+      } else {
+        throw new Error(typeof response.outline === 'string' ? response.outline : 'Failed to generate outline');
+      }
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.detail || err.message || 'Failed to generate outline';
+      setError(errorMessage);
+      state.setError(errorMessage);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const handleContinue = async () => {
+    if (!state.premise || (!state.outline && !state.outlineScenes)) {
+      setError('Please generate a premise and outline first');
+      return;
+    }
+
+    if (state.outline || state.outlineScenes) {
+      state.setAutoGenerateOnWriting(true);
+      onNext();
+    }
+  };
+
+  const handleGenerateImages = async () => {
+    if (!state.outlineScenes || state.outlineScenes.length === 0) {
+      setError('Please generate a structured outline first');
+      return;
+    }
+    if (!state.enableIllustration) {
+      setError('Illustration feature is disabled in Story Setup.');
+      return;
+    }
+
+    setIsGeneratingImages(true);
+    setError(null);
+
+    try {
+      const response = await storyWriterApi.generateSceneImages({
+        scenes: state.outlineScenes,
+        provider: state.imageProvider || undefined,
+        width: state.imageWidth,
+        height: state.imageHeight,
+        model: state.imageModel || undefined,
+      });
+      
+      if (response.success && response.images) {
+        // Store image URLs by scene number
+        const imagesMap = new Map<number, string>();
+        response.images.forEach((image) => {
+          if (image.image_url && !image.error) {
+            imagesMap.set(image.scene_number, image.image_url);
+          }
+        });
+        state.setSceneImages(imagesMap);
+        state.setError(null);
+      } else {
+        throw new Error('Failed to generate images');
+      }
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.detail || err.message || 'Failed to generate images';
+      setError(errorMessage);
+      state.setError(errorMessage);
+    } finally {
+      setIsGeneratingImages(false);
+    }
+  };
+
+  const handleGenerateAudio = async () => {
+    if (!state.outlineScenes || state.outlineScenes.length === 0) {
+      setError('Please generate a structured outline first');
+      return;
+    }
+    if (!state.enableNarration) {
+      setError('Narration feature is disabled in Story Setup.');
+      return;
+    }
+
+    setIsGeneratingAudio(true);
+    setError(null);
+
+    try {
+      const response = await storyWriterApi.generateSceneAudio({
+        scenes: state.outlineScenes,
+        provider: state.audioProvider,
+        lang: state.audioLang,
+        slow: state.audioSlow,
+        rate: state.audioRate,
+      });
+      
+      if (response.success && response.audio_files) {
+        // Store audio URLs by scene number
+        const audioMap = new Map<number, string>();
+        response.audio_files.forEach((audio) => {
+          if (audio.audio_url && !audio.error) {
+            audioMap.set(audio.scene_number, audio.audio_url);
+          }
+        });
+        state.setSceneAudio(audioMap);
+        state.setError(null);
+      } else {
+        throw new Error('Failed to generate audio');
+      }
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.detail || err.message || 'Failed to generate audio';
+      setError(errorMessage);
+      state.setError(errorMessage);
+    } finally {
+      setIsGeneratingAudio(false);
+    }
+  };
+
+  const handleRefineCurrentSceneAnime = async () => {
+    if (!hasScenes || !currentScene) {
+      setError('Please generate your outline before refining scenes.');
+      return;
+    }
+    if (!state.animeBible) {
+      setError('Anime story bible is not available. Generate an anime outline first.');
+      return;
+    }
+
+    setIsRefiningAnimeScene(true);
+    setError(null);
+
+    try {
+      const storyRequest = state.getRequest();
+      const response = await storyWriterApi.refineAnimeSceneText({
+        scene: currentScene,
+        persona: storyRequest.persona,
+        story_setting: storyRequest.story_setting,
+        character_input: storyRequest.character_input,
+        plot_elements: storyRequest.plot_elements,
+        writing_style: storyRequest.writing_style,
+        story_tone: storyRequest.story_tone,
+        narrative_pov: storyRequest.narrative_pov,
+        audience_age_group: storyRequest.audience_age_group,
+        content_rating: storyRequest.content_rating,
+        anime_bible: state.animeBible || null,
+      });
+
+      if (response.success && response.scene) {
+        const refinedScene = response.scene;
+        const nextScenes = [...scenes];
+        if (currentSceneIndex >= 0 && currentSceneIndex < nextScenes.length) {
+          nextScenes[currentSceneIndex] = refinedScene;
+        }
+        state.setOutlineScenes(nextScenes);
+
+        const formattedOutline = nextScenes
+          .map((scene, idx2) =>
+            `Scene ${scene.scene_number || idx2 + 1}: ${scene.title}\n${scene.description}`
+          )
+          .join('\n\n');
+        state.setOutline(formattedOutline);
+      } else {
+        throw new Error('Failed to refine scene with anime bible');
+      }
+    } catch (err: any) {
+      const errorMessage =
+        err.response?.data?.detail || err.message || 'Failed to refine scene with anime bible';
+      setError(errorMessage);
+      state.setError(errorMessage);
+    } finally {
+      setIsRefiningAnimeScene(false);
+    }
+  };
+
+  const handleAnimateScene = async () => {
+    if (!hasScenes || !currentScene) {
+      setError('Please generate your outline before animating scenes.');
+      return;
+    }
+
+    const sceneNumber = currentScene.scene_number || currentSceneIndex + 1;
+    const sceneImageRelativeUrl = state.sceneImages?.get(sceneNumber);
+    if (!sceneImageRelativeUrl) {
+      setError('Please generate an image for this scene before animating it.');
+      return;
+    }
+
+    setAnimatingSceneNumber(sceneNumber);
+    setError(null);
+    updateSceneAnimationResume(sceneNumber, undefined);
+
+    const storyContextPayload = createStoryContextPayload();
+
+    const animationDuration: 5 | 10 = 5;
+
+    try {
+      console.info(
+        `[Outline] Animate scene requested`,
+        { sceneNumber, duration: 5, image: sceneImageRelativeUrl }
+      );
+      const response = await storyWriterApi.animateScene({
+        scene_number: sceneNumber,
+        scene_data: currentScene,
+        story_context: storyContextPayload,
+        image_url: sceneImageRelativeUrl,
+        duration: animationDuration,
+      });
+
+      updateSceneAnimatedVideo(sceneNumber, response.video_url);
+      updateSceneAnimationResume(sceneNumber, undefined);
+      console.info(
+        `[Outline] Animate scene completed`,
+        {
+          sceneNumber,
+          video: response.video_url,
+          cost: response.cost,
+          prediction: response.prediction_id || 'n/a',
+        }
+      );
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      const resumeMessage = captureResumeOpportunity(sceneNumber, animationDuration, detail);
+      const handled = await triggerSubscriptionError(err);
+      const message = resumeMessage || extractDetailMessage(detail, err.message || 'Failed to animate scene.');
+      setError(message);
+      if (!resumeMessage || !handled) {
+        console.error('[Outline] Animate scene failed', err);
+      }
+    } finally {
+      setAnimatingSceneNumber(null);
+    }
+  };
+
+  const handleResumeSceneAnimation = async (
+    sceneNumber: number,
+    resumeInfo: SceneAnimationResume
+  ) => {
+    setAnimatingSceneNumber(sceneNumber);
+    setError(null);
+
+    try {
+      console.info('[Outline] Resume scene requested', {
+        sceneNumber,
+        prediction: resumeInfo.predictionId,
+      });
+
+      const response = await storyWriterApi.resumeAnimateScene({
+        prediction_id: resumeInfo.predictionId,
+        scene_number: sceneNumber,
+        duration: resumeInfo.duration,
+      });
+
+      updateSceneAnimatedVideo(sceneNumber, response.video_url);
+      updateSceneAnimationResume(sceneNumber, undefined);
+
+      console.info('[Outline] Resume scene completed', {
+        sceneNumber,
+        video: response.video_url,
+        cost: response.cost,
+        prediction: response.prediction_id || resumeInfo.predictionId,
+      });
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      const message = extractDetailMessage(detail, err.message || 'Failed to resume animation.');
+      setError(message);
+      await triggerSubscriptionError(err);
+      console.error('[Outline] Resume scene failed', err);
+    } finally {
+      setAnimatingSceneNumber(null);
+    }
+  };
+
+  return (
+    <Box sx={{ mt: 2 }}>
+      <GlobalStyles
+        styles={{
+          '.tw-shadow-book': {
+            boxShadow: '0 36px 80px rgba(45, 30, 15, 0.35)',
+          },
+          '.tw-rounded-book': {
+            borderRadius: '20px',
+          },
+          '.tw-page-accent': {
+            background: 'linear-gradient(120deg, #f9e6c8, #f2d8b4)',
+          },
+        }}
+      />
+      <Snackbar
+        open={outlineToastOpen}
+        autoHideDuration={4500}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+        onClose={handleOutlineToastClose}
+      >
+        <Alert
+          severity="success"
+          variant="filled"
+          sx={{ width: '100%', boxShadow: '0 8px 24px rgba(26, 22, 17, 0.25)' }}
+          onClose={handleOutlineToastClose}
+        >
+          Structured outline with {sceneCount} scenes generated. Each scene includes image prompts and audio narration.
+        </Alert>
+      </Snackbar>
+
+      {error && (
+        <Alert severity="error" sx={{ mb: 3 }} onClose={() => setError(null)}>
+          {error}
+        </Alert>
+      )}
+
+      {resumableSummaryMessage && (
+        <Alert severity="info" sx={{ mb: 3 }}>
+          {resumableSummaryMessage}
+        </Alert>
+      )}
+
+      {!state.premise && (
+        <Alert severity="warning" sx={{ mb: 3 }}>
+          Please generate a premise first in the Setup phase.
+        </Alert>
+      )}
+
+      {(state.outline || state.outlineScenes) ? (
+        <Box component="div">
+          <BookPages
+            currentScene={currentScene}
+            currentSceneIndex={currentSceneIndex}
+            scenesLength={scenes.length}
+            canGoPrev={canGoPrev}
+            canGoNext={canGoNext}
+            pageDirection={pageDirection}
+            onPrev={handlePrevScene}
+            onNext={handleNextScene}
+            imageUrl={currentSceneImageFullUrl}
+            onImageError={() => setImageLoadError((prev) => new Set(prev).add(currentSceneNumber))}
+            narrationEnabled={!!state.enableNarration}
+            audioUrl={resolvedSceneAudioUrl || null}
+            hasAudio={hasAudioForScene}
+            onOpenImageModal={openImageModal}
+            onOpenImageFullscreen={() => setIsImageFullscreenOpen(true)}
+            onOpenAudioModal={openAudioModal}
+            onOpenCharactersModal={openCharactersModal}
+            onOpenKeyEventsModal={openKeyEventsModal}
+            onOpenTitleModal={openTitleModal}
+            onOpenEditModal={openEditModal}
+            onAnimateScene={canAnimateCurrentScene ? handleAnimateScene : undefined}
+            onAnimateWithVoiceover={hasAudioForScene ? handleAnimateSceneWithVoiceover : undefined}
+            onResumeScene={
+              currentSceneResumeInfo && !animatingSceneNumber
+                ? () => handleResumeSceneAnimation(currentSceneNumber, currentSceneResumeInfo)
+                : undefined
+            }
+            resumeInfo={currentSceneResumeInfo}
+            isAnimatingScene={isCurrentSceneAnimating}
+            animatedVideoUrl={currentSceneAnimatedVideoUrl}
+            onRefineAnimeScene={handleRefineCurrentSceneAnime}
+            isRefiningAnimeScene={isRefiningAnimeScene}
+            hasAnimeBible={hasAnimeBible}
+          />
+          <OutlineActionsBar
+            isGenerating={isGenerating}
+            canRegenerateOutline={!!state.premise}
+            onRegenerateOutline={handleGenerateOutline}
+            showMediaActions={!!(state.isOutlineStructured && state.outlineScenes)}
+            isGeneratingImages={isGeneratingImages}
+            isGeneratingAudio={isGeneratingAudio}
+            illustrationEnabled={!!state.enableIllustration && !!hasOutlineScenes}
+            narrationEnabled={!!state.enableNarration && !!hasOutlineScenes}
+            onGenerateImages={handleGenerateImages}
+            onGenerateAudio={handleGenerateAudio}
+            canContinue={!!(state.outline || state.outlineScenes) && !isGenerating && !isGeneratingImages && !isGeneratingAudio}
+            onContinue={handleContinue}
+          />
+        </Box>
+          ) : (
+            <TextField
+              fullWidth
+              multiline
+              rows={12}
+              value={state.outline || ''}
+              onChange={(e) => state.setOutline(e.target.value)}
+              label="Story Outline"
+              sx={{ mb: 3 }}
+            />
+          )}
+      <Dialog
+        open={isImageFullscreenOpen}
+        onClose={() => setIsImageFullscreenOpen(false)}
+        maxWidth="lg"
+        fullWidth
+      >
+        <Box
+          sx={{
+            bgcolor: 'black',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            p: 2,
+          }}
+        >
+          {currentSceneImageFullUrl ? (
+            <Box
+              component="img"
+              src={currentSceneImageFullUrl}
+              alt={currentScene?.title || `Scene ${currentSceneNumber} illustration`}
+              sx={{
+                width: '100%',
+                height: 'auto',
+                maxHeight: '85vh',
+                objectFit: 'contain',
+                display: 'block',
+              }}
+            />
+          ) : (
+            <Typography variant="body2" sx={{ color: 'white' }}>
+              No image is available for this scene yet.
+            </Typography>
+          )}
+        </Box>
+      </Dialog>
+
+      <EditSectionModal
+        open={isEditModalOpen}
+        sceneNumber={currentSceneNumber}
+        editText={editText}
+        onChangeEditText={setEditText}
+        aiFeedback={aiFeedback}
+        onChangeAiFeedback={setAiFeedback}
+        aiLoading={aiLoading}
+        onGenerateSuggestions={handleGenerateAISuggestions}
+        suggestions={aiSuggestions}
+        onPickSuggestion={applySuggestion}
+        onClose={() => setIsEditModalOpen(false)}
+        onSave={handleSaveUpdatedSection}
+      />
+      <ImageEditModal
+        open={isImageModalOpen}
+        sceneNumber={currentSceneNumber}
+        value={imagePromptDraft}
+        onChange={setImagePromptDraft}
+        onClose={() => setIsImageModalOpen(false)}
+        onSave={() => {
+          if (!hasScenes || !currentScene) { setIsImageModalOpen(false); return; }
+          const updated = [...scenes];
+          updated[currentSceneIndex] = { ...updated[currentSceneIndex], image_prompt: imagePromptDraft };
+          (state.setOutlineScenes as any)(updated);
+          setIsImageModalOpen(false);
+        }}
+        onRegenerate={async (prompt: string) => {
+          if (!hasScenes || !currentScene) return;
+          setIsRegeneratingSceneImage(true);
+          try {
+            const sceneNum = currentScene.scene_number || currentSceneIndex + 1;
+            const sceneTitle = currentScene.title || `Scene ${sceneNum}`;
+
+            const resp = await storyWriterApi.regenerateSceneImage({
+              scene_number: sceneNum,
+              scene_title: sceneTitle,
+              prompt: prompt.trim(),
+              provider: state.imageProvider || undefined,
+              width: state.imageWidth,
+              height: state.imageHeight,
+              model: state.imageModel || undefined,
+            });
+
+            if (resp.success && resp.image_url) {
+              const nextMap = new Map(state.sceneImages || []);
+              nextMap.set(sceneNum, resp.image_url);
+              state.setSceneImages(nextMap);
+
+              const updated = [...scenes];
+              updated[currentSceneIndex] = { ...updated[currentSceneIndex], image_prompt: prompt.trim() };
+              (state.setOutlineScenes as any)(updated);
+              setImagePromptDraft(prompt.trim());
+              setIsImageModalOpen(false);
+            } else {
+              throw new Error(resp.error || 'Failed to regenerate image');
+            }
+          } catch (err: any) {
+            console.error('Failed to regenerate scene image:', err);
+            throw err;
+          } finally {
+            setIsRegeneratingSceneImage(false);
+          }
+        }}
+        imageProvider={state.imageProvider}
+        imageWidth={state.imageWidth}
+        imageHeight={state.imageHeight}
+        imageModel={state.imageModel}
+        onOpenAdvancedSettings={handleOpenAdvancedImageSettings}
+      />
+      <StoryImageGenerationModal
+        open={isImageSettingsModalOpen}
+        onClose={() => setIsImageSettingsModalOpen(false)}
+        onGenerate={handleGenerateImageWithSettings}
+        initialPrompt={imagePromptDraft}
+        sceneTitle={currentScene?.title || undefined}
+        storyMode={state.storyMode}
+        isGenerating={isImageSettingsGenerating}
+      />
+      <AudioScriptModal
+        open={isAudioModalOpen}
+        sceneNumber={currentSceneNumber}
+        value={audioScriptDraft}
+        onChange={setAudioScriptDraft}
+        onClose={() => setIsAudioModalOpen(false)}
+        onSave={() => {
+          if (!hasScenes || !currentScene) { setIsAudioModalOpen(false); return; }
+          const updated = [...scenes];
+          updated[currentSceneIndex] = { ...updated[currentSceneIndex], audio_narration: audioScriptDraft };
+          (state.setOutlineScenes as any)(updated);
+          setIsAudioModalOpen(false);
+        }}
+        audioProvider={state.audioProvider}
+        audioLang={state.audioLang}
+        audioSlow={state.audioSlow}
+        audioRate={state.audioRate}
+        onChangeProvider={state.setAudioProvider}
+        onChangeLang={state.setAudioLang}
+        onChangeSlow={state.setAudioSlow}
+        onChangeRate={state.setAudioRate}
+        audioUrl={
+          (state.sceneAudio && state.sceneAudio.get(currentSceneNumber)
+            ? storyWriterApi.getAudioUrl(state.sceneAudio.get(currentSceneNumber) || '')
+            : currentSceneAudioFullUrl) || null
+        }
+        onGenerateAI={async (params: {
+          text: string;
+          voice_id?: string;
+          speed?: number;
+          volume?: number;
+          pitch?: number;
+          emotion?: string;
+        }) => {
+          if (!hasScenes || !currentScene) return;
+          setIsRegeneratingSceneAudio(true);
+          try {
+            const sceneNum = currentScene.scene_number || currentSceneIndex + 1;
+            const sceneTitle = currentScene.title || `Scene ${sceneNum}`;
+            
+            const resp = await storyWriterApi.generateAIAudio({
+              scene_number: sceneNum,
+              scene_title: sceneTitle,
+              text: params.text.trim(),
+              voice_id: params.voice_id || 'Wise_Woman',
+              speed: params.speed !== undefined ? params.speed : 1.0,
+              volume: params.volume !== undefined ? params.volume : 1.0,
+              pitch: params.pitch !== undefined ? params.pitch : 0.0,
+              emotion: params.emotion || 'happy',
+            });
+            
+            if (resp.success && resp.audio_url) {
+              const nextMap = new Map(state.sceneAudio || []);
+              nextMap.set(sceneNum, resp.audio_url);
+              state.setSceneAudio(nextMap);
+              
+              // Update the scene with the new audio_narration if generation was successful
+              const updated = [...scenes];
+              updated[currentSceneIndex] = { ...updated[currentSceneIndex], audio_narration: params.text.trim() };
+              (state.setOutlineScenes as any)(updated);
+              setAudioScriptDraft(params.text.trim());
+              
+              // Close the modal after successful generation
+              setIsAudioModalOpen(false);
+            } else {
+              throw new Error(resp.error || 'Failed to generate AI audio');
+            }
+          } catch (err: any) {
+            console.error('Failed to generate AI audio:', err);
+            throw err; // Re-throw to be handled by modal
+          } finally {
+            setIsRegeneratingSceneAudio(false);
+          }
+        }}
+        onGenerateFree={async (text: string) => {
+          if (!hasScenes || !currentScene) return;
+          setIsRegeneratingSceneAudio(true);
+          try {
+            const sceneNum = currentScene.scene_number || currentSceneIndex + 1;
+            const sceneTitle = currentScene.title || `Scene ${sceneNum}`;
+            
+            const resp = await storyWriterApi.generateFreeAudio({
+              scene_number: sceneNum,
+              scene_title: sceneTitle,
+              text: text.trim(),
+              provider: state.audioProvider || 'gtts',
+              lang: state.audioLang || 'en',
+              slow: state.audioSlow || false,
+              rate: state.audioRate || 150,
+            });
+            
+            if (resp.success && resp.audio_url) {
+              const nextMap = new Map(state.sceneAudio || []);
+              nextMap.set(sceneNum, resp.audio_url);
+              state.setSceneAudio(nextMap);
+              
+              // Update the scene with the new audio_narration if generation was successful
+              const updated = [...scenes];
+              updated[currentSceneIndex] = { ...updated[currentSceneIndex], audio_narration: text.trim() };
+              (state.setOutlineScenes as any)(updated);
+              setAudioScriptDraft(text.trim());
+              
+              // Close the modal after successful generation
+              setIsAudioModalOpen(false);
+            } else {
+              throw new Error(resp.error || 'Failed to generate free audio');
+            }
+          } catch (err: any) {
+            console.error('Failed to generate free audio:', err);
+            throw err; // Re-throw to be handled by modal
+          } finally {
+            setIsRegeneratingSceneAudio(false);
+          }
+        }}
+      />
+      <CharactersModal
+        open={isCharactersModalOpen}
+        sceneNumber={currentSceneNumber}
+        characters={currentScene?.character_descriptions || []}
+        onClose={() => setIsCharactersModalOpen(false)}
+      />
+      <KeyEventsModal
+        open={isKeyEventsModalOpen}
+        sceneNumber={currentSceneNumber}
+        events={currentScene?.key_events || []}
+        onClose={() => setIsKeyEventsModalOpen(false)}
+      />
+      <TitleEditModal
+        open={isTitleModalOpen}
+        sceneNumber={currentSceneNumber}
+        value={titleDraft}
+        onChange={setTitleDraft}
+        onClose={() => setIsTitleModalOpen(false)}
+        onSave={() => {
+          if (!hasScenes || !currentScene) { setIsTitleModalOpen(false); return; }
+          const updated = [...scenes];
+          updated[currentSceneIndex] = { ...updated[currentSceneIndex], title: titleDraft };
+          (state.setOutlineScenes as any)(updated);
+          setIsTitleModalOpen(false);
+        }}
+      />
+        </Box>
+  );
+};
+
+export default StoryOutline;

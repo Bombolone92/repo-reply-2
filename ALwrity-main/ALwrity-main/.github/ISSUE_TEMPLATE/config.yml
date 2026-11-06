@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: GitHub Community Support
+    url: https://github.com/AJaySi/ALwrity/discussions
+    about: Please ask and answer questions here.
+  - name: ALwrity Documentation
+    url: https://github.com/AJaySi/ALwrity/wiki
+    about: Check our documentation for setup guides and tutorials.
+  - name: Security Vulnerability
+    url: https://github.com/AJaySi/ALwrity/security/advisories/new
+    about: Report security vulnerabilities privately.

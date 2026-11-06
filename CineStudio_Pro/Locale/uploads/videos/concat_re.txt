@@ -1,0 +1,6 @@
+file 'uploads/videos/Verso il pizzo - S1_E4_SC01_INQ01.mp4'
+file 'uploads/videos/Verso il pizzo - S1_E4_SC01_INQ02.mp4'
+file 'uploads/videos/Verso il pizzo - S1_E4_SC02_INQ03.mp4'
+file 'uploads/videos/Verso il pizzo - S1_E4_SC02_INQ04.mp4'
+file 'uploads/videos/Verso il pizzo - S1_E4_SC03_INQ05.mp4'
+file 'uploads/videos/Verso il pizzo - S1_E4_SC03_INQ06.mp4'

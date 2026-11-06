@@ -1,0 +1,2 @@
+# Use start_alwrity_backend.py for deployment
+web: python start_alwrity_backend.py --production

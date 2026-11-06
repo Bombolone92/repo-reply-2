@@ -1,0 +1,119 @@
+# ====================
+# Python
+# ====================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# ====================
+# Virtual Environment
+# ====================
+.venv/
+venv/
+env/
+ENV/
+
+# ====================
+# API Keys & Secrets
+# ====================
+data/
+token.json
+config.json
+client_secrets.json
+token.pickle
+*.env
+.env
+
+# ====================
+# Generated Content Folders
+# (Each topic creates its own folder)
+# ====================
+# Ignore all generated topic folders and heavy output directories
+workspace/
+outputs/
+output/
+downloads/
+temp/
+videofx_outputs/
+videofx_profile/
+
+# Ignore all generated media files everywhere (prevents large files from being tracked)
+*.mp4
+*.mp3
+*.wav
+*.m4a
+*.ass
+*.srt
+*.webm
+*.avi
+*.mov
+*.mkv
+
+# Ignore common generated JSON/text artifacts
+metadata.json
+timestamps.txt
+slideshow.txt
+transcript.txt
+
+
+# ====================
+# Temp / Test Files
+# ====================
+test_captions.py
+test_captions.ass
+test_captions2.ass
+test_caption_output.mp4
+test_caption_output2.mp4
+fix_captions.py
+scratch_wavespeed.py
+*.tmp
+
+# ====================
+# Logs & Debug
+# ====================
+*.log
+logs/
+
+# ====================
+# Web / Node
+# ====================
+web/node_modules/
+web/.next/
+web/out/
+web/build/
+.npm/
+
+# ====================
+# IDE / OS
+# ====================
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
+desktop.ini
+
+# ====================
+# Specific Generated Folders
+# ====================
+Dajjal/
+Demon/
+Kids/
+Want To Win You Need To Fight/
+agent_workspace/
+
+# ====================
+# Temp Scripts & Accidental Files
+# ====================
+fix.py
+generate_pages.py
+recover2.py
+recover_tsx.py
+test_clipper.py
+package-lock.json
+login_videofx.py

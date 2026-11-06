@@ -1,0 +1,242 @@
+import { useCallback } from 'react';
+import { debug } from '../../../utils/debug';
+import { mediumBlogApi } from '../../../services/blogWriterApi';
+import { blogWriterCache } from '../../../services/blogWriterCache';
+
+interface UsePhaseActionHandlersProps {
+  research: any;
+  outline: any[];
+  selectedTitle: string | null;
+  contentConfirmed: boolean;
+  sections: Record<string, string>;
+  seoAnalysis: any;
+  navigateToPhase: (phase: string) => void;
+  handleOutlineConfirmed: () => void;
+  setIsMediumGenerationStarting: (starting: boolean) => void;
+  mediumPolling: any;
+  outlineGenRef: React.RefObject<any>;
+  setOutline: (outline: any[]) => void;
+  setContentConfirmed: (confirmed: boolean) => void;
+  setIsSEOAnalysisModalOpen: (open: boolean) => void;
+  setIsSEOMetadataModalOpen: (open: boolean) => void;
+  runSEOAnalysisDirect: () => string;
+  skipContentAutoConfirmRef?: React.MutableRefObject<boolean>;
+  onResearchComplete?: (research: any) => void;
+  onOutlineComplete?: (outline: any) => void;
+  onContentComplete?: (sections: Record<string, string>) => void;
+}
+
+export const usePhaseActionHandlers = ({
+  research,
+  outline,
+  selectedTitle,
+  contentConfirmed,
+  sections,
+  seoAnalysis,
+  navigateToPhase,
+  handleOutlineConfirmed,
+  setIsMediumGenerationStarting,
+  mediumPolling,
+  outlineGenRef,
+  setOutline,
+  setContentConfirmed,
+  setIsSEOAnalysisModalOpen,
+  setIsSEOMetadataModalOpen,
+  runSEOAnalysisDirect,
+  skipContentAutoConfirmRef,
+  onResearchComplete,
+  onOutlineComplete,
+  onContentComplete,
+}: UsePhaseActionHandlersProps) => {
+  const handleResearchAction = useCallback(() => {
+    navigateToPhase('research');
+  }, [navigateToPhase]);
+
+  const handleOutlineAction = useCallback(async () => {
+    if (!research) {
+      alert('Please complete research first before generating an outline.');
+      return;
+    }
+    navigateToPhase('outline');
+    if (outlineGenRef.current) {
+      try {
+        const result = await outlineGenRef.current.generateNow();
+        if (!result.success) {
+          alert(result.message || 'Failed to generate outline');
+        } else if (result.cached && result.outline) {
+          // Cached result: set state directly (onOutlineCreated was already called by generateNow)
+          setOutline(result.outline);
+          if (result.title_options) {
+            if (onOutlineComplete) {
+              onOutlineComplete({ outline: result.outline, title_options: result.title_options });
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Outline generation failed:', error);
+        alert(`Outline generation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+    }
+    debug.log('[BlogWriter] Outline action triggered');
+  }, [research, navigateToPhase, outlineGenRef, setOutline, onOutlineComplete]);
+
+  const handleOutlineStartAction = useCallback(async () => {
+    if (!research) {
+      alert('Please complete research first before generating an outline.');
+      return;
+    }
+    navigateToPhase('outline');
+    // Clear cached outline + title options to force re-generation
+    try {
+      localStorage.removeItem('blog_outline');
+      localStorage.removeItem('blog_title_options');
+    } catch { /* noop */ }
+    if (outlineGenRef.current) {
+      try {
+        const result = await outlineGenRef.current.generateNow();
+        if (!result.success) {
+          alert(result.message || 'Failed to generate outline');
+        } else if (result.cached && result.outline) {
+          // Should not normally happen since we cleared cache, but handle defensively
+          setOutline(result.outline);
+          if (result.title_options && onOutlineComplete) {
+            onOutlineComplete({ outline: result.outline, title_options: result.title_options });
+          }
+        }
+      } catch (error) {
+        console.error('Outline re-generation failed:', error);
+        alert(`Outline re-generation failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+    }
+    debug.log('[BlogWriter] Outline re-generation triggered');
+  }, [research, navigateToPhase, outlineGenRef, setOutline, onOutlineComplete]);
+
+  const handleContentAction = useCallback(async () => {
+    if (!outline || outline.length === 0) {
+      alert('Please generate an outline first.');
+      return;
+    }
+    if (!research) {
+      alert('Research data is required for content generation.');
+      return;
+    }
+    navigateToPhase('content');
+    
+    // Confirm outline first
+    handleOutlineConfirmed();
+    
+    const outlineIds = outline.map(s => String(s.id));
+    const hasExistingContent = sections && Object.keys(sections).length > 0 && Object.values(sections).some(c => c?.trim());
+    
+    // Signal to polling callback: if content was already confirmed (Re-Content),
+    // skip auto-confirm and SEO navigation so user stays on content phase to review
+    if (skipContentAutoConfirmRef && hasExistingContent) {
+      skipContentAutoConfirmRef.current = true;
+      debug.log('[BlogWriter] Re-Content: setting skipAutoConfirm flag');
+    }
+    
+    // Only use cache for initial generation (when no content exists yet).
+    // "Re-Content" label means user explicitly wants to regenerate, so skip cache.
+    if (!hasExistingContent) {
+      const cachedContent = blogWriterCache.getCachedContent(outlineIds);
+      if (cachedContent) {
+        debug.log('[BlogWriter] Using cached content from localStorage', { sections: Object.keys(cachedContent).length });
+        if (onContentComplete) {
+          onContentComplete(cachedContent);
+        }
+        return;
+      }
+      if (blogWriterCache.contentExistsInState(sections || {}, outlineIds)) {
+        debug.log('[BlogWriter] Content already exists in state, skipping generation');
+        return;
+      }
+    } else {
+      debug.log('[BlogWriter] Content exists - regenerating per user request');
+    }
+    
+    // If short/medium blog (<=1000 words), trigger content generation automatically
+    const target = Number(
+      research?.keyword_analysis?.blog_length || 
+      (research as any)?.word_count_target || 
+      localStorage.getItem('blog_length_target') || 
+      0
+    );
+    
+    if (target && target <= 1000) {
+      try {
+        setIsMediumGenerationStarting(true);
+        const payload = {
+          title: selectedTitle || (typeof window !== 'undefined' ? localStorage.getItem('blog_selected_title') : '') || outline[0]?.heading || 'Untitled',
+          sections: outline.map(s => ({
+            id: s.id,
+            heading: s.heading,
+            keyPoints: s.key_points,
+            subheadings: s.subheadings,
+            keywords: s.keywords,
+            targetWords: s.target_words,
+            references: s.references,
+          })),
+          globalTargetWords: target,
+          researchKeywords: research.original_keywords || research.keyword_analysis?.primary || [],
+        };
+
+        const { task_id } = await mediumBlogApi.startMediumGeneration(payload as any);
+        setIsMediumGenerationStarting(false);
+        mediumPolling.startPolling(task_id);
+        debug.log('[BlogWriter] Content action triggered - medium generation started', { task_id });
+      } catch (error) {
+        console.error('Content generation failed:', error);
+        setIsMediumGenerationStarting(false);
+        const errMsg = error instanceof Error ? error.message : 'Unknown error';
+        if (errMsg.includes('insufficient_balance') || errMsg.includes('balance_not_enough') || (errMsg.includes('403') && errMsg.includes('balance'))) {
+          alert('Your API balance is insufficient. Please top up your WaveSpeed account or switch to a different provider (e.g., set GPT_PROVIDER=google in your environment).');
+        } else {
+          alert(`Content generation failed: ${errMsg}`);
+        }
+      }
+    } else {
+      // For longer blogs, just confirm outline - user will use manual button
+      debug.log('[BlogWriter] Content action triggered - outline confirmed (manual content generation required)');
+    }
+  }, [outline, research, selectedTitle, sections, navigateToPhase, handleOutlineConfirmed, setIsMediumGenerationStarting, mediumPolling, onContentComplete]);
+
+  const handleSEOAction = useCallback(() => {
+    debug.log('[BlogWriter] handleSEOAction called', { contentConfirmed, hasSeoAnalysis: !!seoAnalysis });
+    if (!contentConfirmed) {
+      setContentConfirmed(true);
+    }
+    const navResult = navigateToPhase('seo');
+    debug.log('[BlogWriter] navigateToPhase(seo) returned', { navResult });
+    if (seoAnalysis) {
+      setIsSEOAnalysisModalOpen(true);
+      debug.log('[BlogWriter] SEO analysis exists - opening modal for review');
+    } else {
+      const result = runSEOAnalysisDirect();
+      debug.log('[BlogWriter] runSEOAnalysisDirect returned', { result });
+    }
+  }, [contentConfirmed, seoAnalysis, setContentConfirmed, navigateToPhase, setIsSEOAnalysisModalOpen, runSEOAnalysisDirect]);
+
+  const handleApplySEORecommendations = useCallback(() => {
+    navigateToPhase('seo');
+    setIsSEOAnalysisModalOpen(true);
+    debug.log('[BlogWriter] Apply SEO Recommendations action triggered - opening SEO analysis modal');
+  }, [navigateToPhase, setIsSEOAnalysisModalOpen]);
+
+  const handlePublishAction = useCallback(() => {
+    // Can be called from SEO phase (after recommendations applied) or publish phase
+    navigateToPhase('seo'); // Stay in SEO phase if called from there
+    setIsSEOMetadataModalOpen(true);
+    debug.log('[BlogWriter] Generate SEO Metadata action triggered - opening SEO metadata modal');
+  }, [navigateToPhase, setIsSEOMetadataModalOpen]);
+
+  return {
+    handleResearchAction,
+    handleOutlineAction,
+    handleOutlineStartAction,
+    handleContentAction,
+    handleSEOAction,
+    handleApplySEORecommendations,
+    handlePublishAction,
+  };
+};
+

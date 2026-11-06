@@ -1,0 +1,155 @@
+"""
+Outline Optimizer - AI-powered outline optimization and rebalancing.
+
+Optimizes outlines for better flow, SEO, and engagement.
+"""
+
+from typing import List, Dict, Any, Optional
+from loguru import logger
+
+from models.blog_models import BlogOutlineSection
+
+
+class OutlineOptimizer:
+    """Optimizes outlines for better flow, SEO, and engagement."""
+    
+    async def optimize(self, outline: List[BlogOutlineSection], focus: str, user_id: str, research_context: str = "") -> List[BlogOutlineSection]:
+        """Optimize entire outline for better flow, SEO, and engagement.
+        
+        Args:
+            outline: List of outline sections to optimize
+            focus: Optimization focus (e.g., "general optimization")
+            user_id: User ID (required for subscription checks and usage tracking)
+            research_context: Optional research context to ground optimization
+            
+        Returns:
+            List of optimized outline sections
+            
+        Raises:
+            ValueError: If user_id is not provided
+        """
+        if not user_id:
+            raise ValueError("user_id is required for outline optimization (subscription checks and usage tracking)")
+        
+        outline_text = "\n".join([f"{i+1}. {s.heading}" for i, s in enumerate(outline)])
+        
+        optimization_prompt = f"""Optimize this blog outline for better flow, engagement, and SEO:
+
+Current Outline:
+{outline_text}
+
+Optimization Focus: {focus}
+
+Goals: Improve narrative flow, enhance SEO, increase engagement, ensure comprehensive coverage.
+"""
+        if research_context:
+            optimization_prompt += f"""
+Research Context (use this to ground your optimization in real data):
+{research_context}
+
+Ensure the optimized outline reflects the research insights above — headings should address the key topics, keywords should align with search intent, and sections should cover the most important angles from the research.
+"""
+
+        optimization_prompt += """
+Return JSON format:
+{
+    "outline": [
+        {
+            "heading": "Optimized heading",
+            "subheadings": ["subheading 1", "subheading 2"],
+            "key_points": ["point 1", "point 2"],
+            "target_words": 300,
+            "keywords": ["keyword1", "keyword2"]
+        }
+    ]
+}"""
+        
+        try:
+            from services.llm_providers.main_text_generation import llm_text_gen
+            
+            optimization_schema = {
+                "type": "object",
+                "properties": {
+                    "outline": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "heading": {"type": "string"},
+                                "subheadings": {"type": "array", "items": {"type": "string"}},
+                                "key_points": {"type": "array", "items": {"type": "string"}},
+                                "target_words": {"type": "integer"},
+                                "keywords": {"type": "array", "items": {"type": "string"}}
+                            },
+                            "required": ["heading", "subheadings", "key_points", "target_words", "keywords"]
+                        }
+                    }
+                },
+                "required": ["outline"],
+                "propertyOrdering": ["outline"]
+            }
+            
+            optimized_data = llm_text_gen(
+                prompt=optimization_prompt,
+                json_struct=optimization_schema,
+                system_prompt=None,
+                user_id=user_id
+            )
+            
+            # Handle the new schema format with "outline" wrapper
+            if isinstance(optimized_data, dict) and 'outline' in optimized_data:
+                optimized_sections = []
+                for i, section_data in enumerate(optimized_data['outline']):
+                    section = BlogOutlineSection(
+                        id=f"s{i+1}",
+                        heading=section_data.get('heading', f'Section {i+1}'),
+                        subheadings=section_data.get('subheadings', []),
+                        key_points=section_data.get('key_points', []),
+                        references=outline[i].references if i < len(outline) else [],
+                        target_words=section_data.get('target_words', 300),
+                        keywords=section_data.get('keywords', [])
+                    )
+                    optimized_sections.append(section)
+                logger.info(f"✅ Outline optimization completed: {len(optimized_sections)} sections optimized")
+                return optimized_sections
+            else:
+                logger.warning(f"Invalid optimization response format: {type(optimized_data)}")
+                
+        except Exception as e:
+            logger.warning(f"AI outline optimization failed: {e}")
+            logger.info("Returning original outline without optimization")
+        
+        return outline
+    
+    def rebalance_word_counts(self, outline: List[BlogOutlineSection], target_words: int) -> List[BlogOutlineSection]:
+        """Rebalance word count distribution across sections, weighting by source count."""
+        total_sections = len(outline)
+        if total_sections == 0:
+            return outline
+        
+        intro_words = int(target_words * 0.12)
+        conclusion_words = int(target_words * 0.12)
+        main_content_words = target_words - intro_words - conclusion_words
+        
+        # Weight sections by research density (sections with more sources get more words)
+        main_sections = outline[1:-1] if total_sections > 2 else outline
+        source_weights = []
+        for section in main_sections:
+            ref_count = len(getattr(section, 'references', []) or [])
+            source_weights.append(1.0 + ref_count * 0.5)
+        
+        total_weight = sum(source_weights) if source_weights else len(main_sections)
+        
+        for i, section in enumerate(outline):
+            if i == 0 and total_sections > 2:
+                section.target_words = intro_words
+            elif i == total_sections - 1 and total_sections > 2:
+                section.target_words = conclusion_words
+            else:
+                main_idx = i - 1 if total_sections > 2 else i
+                if main_idx < len(source_weights):
+                    section.target_words = int(main_content_words * source_weights[main_idx] / total_weight)
+                else:
+                    section.target_words = main_content_words // max(len(main_sections), 1)
+        
+        return outline

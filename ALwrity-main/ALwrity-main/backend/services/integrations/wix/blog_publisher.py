@@ -1,0 +1,626 @@
+"""
+Blog Post Publisher for Wix
+
+Handles blog post creation, validation, and publishing to Wix.
+"""
+
+import json
+import os
+import re
+import uuid
+import requests
+import jwt
+from typing import Dict, Any, Optional, List
+from loguru import logger
+from services.integrations.wix.blog import WixBlogService
+from services.integrations.wix.content import convert_content_to_ricos
+from services.integrations.wix.ricos_converter import convert_via_wix_api
+from services.integrations.wix.seo import build_seo_data
+from services.integrations.wix.logger import wix_logger
+from services.integrations.wix.utils import normalize_token_string
+
+
+def validate_ricos_content(ricos_content: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Validate and normalize Ricos document structure.
+    
+    Args:
+        ricos_content: Ricos document dict
+        
+    Returns:
+        Validated and normalized Ricos document
+    """
+    # Validate Ricos document structure before using
+    if not ricos_content or not isinstance(ricos_content, dict):
+        logger.error("Invalid Ricos content - not a dict")
+        raise ValueError("Failed to convert content to valid Ricos format")
+    
+    if 'type' not in ricos_content:
+        ricos_content['type'] = 'DOCUMENT'
+        logger.debug("Added missing richContent type 'DOCUMENT'")
+    if ricos_content.get('type') != 'DOCUMENT':
+        logger.warning(f"richContent type expected 'DOCUMENT', got {ricos_content.get('type')}, correcting")
+        ricos_content['type'] = 'DOCUMENT'
+
+    if 'id' not in ricos_content or not isinstance(ricos_content.get('id'), str):
+        ricos_content['id'] = str(uuid.uuid4())
+        logger.debug("Added missing richContent id")
+
+    if 'nodes' not in ricos_content:
+        logger.warning("Ricos document missing 'nodes' field, adding empty nodes array")
+        ricos_content['nodes'] = []
+    
+    logger.debug(f"Ricos document structure: nodes={len(ricos_content.get('nodes', []))}")
+
+    # Validate richContent is a proper object with nodes array
+    # Per Wix API: richContent must be a RichContent object with nodes array
+    if not isinstance(ricos_content, dict):
+        raise ValueError(f"richContent must be a dict object, got {type(ricos_content)}")
+    
+    # Ensure nodes array exists and is valid
+    if 'nodes' not in ricos_content:
+        logger.warning("richContent missing 'nodes', adding empty array")
+        ricos_content['nodes'] = []
+    
+    if not isinstance(ricos_content['nodes'], list):
+        raise ValueError(f"richContent.nodes must be a list, got {type(ricos_content['nodes'])}")
+    
+    # Recursive function to validate and fix nodes at any depth
+    def validate_node_recursive(node: Dict[str, Any], path: str = "root") -> None:
+        """
+        Recursively validate a node and all its nested children, ensuring:
+        1. All required data fields exist for each node type
+        2. All 'nodes' arrays are proper lists
+        3. No None values in critical fields
+        """
+        if not isinstance(node, dict):
+            logger.error(f"{path}: Node is not a dict: {type(node)}")
+            return
+        
+        # Ensure type and id exist
+        if 'type' not in node:
+            logger.error(f"{path}: Missing 'type' field - REQUIRED")
+            node['type'] = 'PARAGRAPH'  # Default fallback
+        if 'id' not in node:
+            node['id'] = str(uuid.uuid4())
+            logger.debug(f"{path}: Added missing 'id'")
+        
+        node_type = node.get('type')
+        
+        # CRITICAL: Per Wix API schema, data fields like paragraphData, bulletedListData, etc.
+        # are OPTIONAL and should be OMITTED entirely when empty, not included as {}
+        # Only validate fields that have required properties
+        
+        # Special handling: Remove listItemData if it exists (not in Wix API schema)
+        if node_type == 'LIST_ITEM' and 'listItemData' in node:
+            logger.debug(f"{path}: Removing incorrect listItemData field from LIST_ITEM")
+            del node['listItemData']
+        
+        # Only validate HEADING nodes - they require headingData with level property
+        if node_type == 'HEADING':
+            if 'headingData' not in node or not isinstance(node.get('headingData'), dict):
+                logger.warning(f"{path} (HEADING): Missing headingData, adding default level 1")
+                node['headingData'] = {'level': 1}
+            elif 'level' not in node['headingData']:
+                logger.warning(f"{path} (HEADING): Missing level in headingData, adding default")
+                node['headingData']['level'] = 1
+        
+        # TEXT nodes must have textData
+        if node_type == 'TEXT':
+            if 'textData' not in node or not isinstance(node.get('textData'), dict):
+                logger.error(f"{path} (TEXT): Missing/invalid textData - node will be problematic")
+                node['textData'] = {'text': '', 'decorations': []}
+        
+        # LINK and IMAGE nodes must have their data fields
+        if node_type == 'LINK' and ('linkData' not in node or not isinstance(node.get('linkData'), dict)):
+            logger.error(f"{path} (LINK): Missing/invalid linkData - node will be problematic")
+        if node_type == 'IMAGE' and ('imageData' not in node or not isinstance(node.get('imageData'), dict)):
+            logger.error(f"{path} (IMAGE): Missing/invalid imageData - node will be problematic")
+        
+        # Remove None values from any data fields that exist (Wix API rejects None)
+        for data_field in ['headingData', 'paragraphData', 'blockquoteData', 'bulletedListData', 
+                          'orderedListData', 'textData', 'linkData', 'imageData']:
+            if data_field in node and isinstance(node[data_field], dict):
+                data_value = node[data_field]
+                keys_to_remove = [k for k, v in data_value.items() if v is None]
+                if keys_to_remove:
+                    logger.debug(f"{path} ({node_type}): Removing None values from {data_field}: {keys_to_remove}")
+                    for key in keys_to_remove:
+                        del data_value[key]
+        
+        # Ensure 'nodes' field exists for container nodes
+        container_types = ['HEADING', 'PARAGRAPH', 'BLOCKQUOTE', 'LIST_ITEM', 'LINK', 
+                          'BULLETED_LIST', 'ORDERED_LIST']
+        if node_type in container_types:
+            if 'nodes' not in node:
+                logger.warning(f"{path} ({node_type}): Missing 'nodes' field, adding empty array")
+                node['nodes'] = []
+            elif not isinstance(node['nodes'], list):
+                logger.error(f"{path} ({node_type}): Invalid 'nodes' field (not a list), fixing")
+                node['nodes'] = []
+            
+            # Recursively validate all nested nodes
+            for nested_idx, nested_node in enumerate(node['nodes']):
+                nested_path = f"{path}.nodes[{nested_idx}]"
+                validate_node_recursive(nested_node, nested_path)
+    
+    # Validate all top-level nodes recursively
+    for idx, node in enumerate(ricos_content['nodes']):
+        validate_node_recursive(node, f"nodes[{idx}]")
+    
+    # Ensure documentStyle exists and is a dict (required by Wix API when provided)
+    if 'metadata' not in ricos_content or not isinstance(ricos_content.get('metadata'), dict):
+        ricos_content['metadata'] = {'version': 1, 'id': str(uuid.uuid4())}
+        logger.debug("Added default metadata to richContent")
+    else:
+        ricos_content['metadata'].setdefault('version', 1)
+        ricos_content['metadata'].setdefault('id', str(uuid.uuid4()))
+    
+    if 'documentStyle' not in ricos_content or not isinstance(ricos_content.get('documentStyle'), dict):
+        ricos_content['documentStyle'] = {
+            'paragraph': {
+                'decorations': [],
+                'nodeStyle': {},
+                'lineHeight': '1.5'
+            }
+        }
+        logger.debug("Added default documentStyle to richContent")
+    
+    logger.debug(f"✅ Validated richContent: {len(ricos_content['nodes'])} nodes, has_metadata={bool(ricos_content.get('metadata'))}, has_documentStyle={bool(ricos_content.get('documentStyle'))}")
+    
+    return ricos_content
+
+
+_UUID_RE = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.IGNORECASE)
+
+def _looks_like_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+        return True
+    except (ValueError, AttributeError):
+        return bool(_UUID_RE.match(value))
+
+
+def validate_payload_no_none(obj, path=""):
+    """Recursively validate that no None values exist in the payload"""
+    if obj is None:
+        raise ValueError(f"Found None value at path: {path}")
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            validate_payload_no_none(value, f"{path}.{key}" if path else key)
+    elif isinstance(obj, list):
+        for idx, item in enumerate(obj):
+            validate_payload_no_none(item, f"{path}[{idx}]" if path else f"[{idx}]")
+
+
+def create_blog_post(
+    blog_service: WixBlogService,
+    access_token: str,
+    title: str,
+    content: str,
+    member_id: str,
+    cover_image_url: str = None,
+    category_ids: List[str] = None,
+    tag_ids: List[str] = None,
+    publish: bool = True,
+    seo_metadata: Dict[str, Any] = None,
+    site_id: str = None,
+    import_image_func = None,
+    lookup_categories_func = None,
+    lookup_tags_func = None,
+    base_url: str = 'https://www.wixapis.com'
+) -> Dict[str, Any]:
+    """
+    Create and optionally publish a blog post on Wix
+    
+    Args:
+        blog_service: WixBlogService instance
+        access_token: Valid access token
+        title: Blog post title
+        content: Blog post content (markdown)
+        member_id: Required for third-party apps - the member ID of the post author
+        cover_image_url: Optional cover image URL
+        category_ids: Optional list of category IDs or names
+        tag_ids: Optional list of tag IDs or names
+        publish: Whether to publish immediately or save as draft
+        seo_metadata: Optional SEO metadata dict
+        import_image_func: Function to import images (optional)
+        lookup_categories_func: Function to lookup/create categories (optional)
+        lookup_tags_func: Function to lookup/create tags (optional)
+        base_url: Wix API base URL
+        
+    Returns:
+        Created blog post information
+    """
+    # ===== PRE-FLIGHT VALIDATION =====
+    errors = []
+    warnings = []
+    
+    if not member_id:
+        errors.append("memberId is required for third-party apps creating blog posts")
+    
+    title_clean = str(title).strip() if title else ""
+    if not title_clean:
+        errors.append("Title is required")
+    elif len(title_clean) > 200:
+        errors.append(f"Title is too long ({len(title_clean)} chars, max 200)")
+    
+    # Ensure access_token is a string
+    normalized_token = normalize_token_string(access_token)
+    if not normalized_token:
+        errors.append("access_token is required and must be a valid string or token object")
+    else:
+        access_token = normalized_token.strip()
+        if not access_token:
+            errors.append("access_token cannot be empty")
+    
+    content_clean = str(content).strip() if content else ""
+    if not content_clean:
+        logger.warning("Content was empty, using default text")
+        content = "This is a post from ALwrity."
+    elif len(content_clean) > 100000:
+        errors.append(f"Content is too long ({len(content_clean)} chars, max 100,000)")
+    
+    if errors:
+        raise ValueError(f"Wix publish validation failed: {'; '.join(errors)}")
+    
+    wix_logger.reset()
+    wix_logger.log_operation_start("Blog Post Creation", title=title[:50] if title else None, member_id=member_id[:20] if member_id else None)
+    
+    from .auth_utils import get_wix_headers
+    
+    # Headers for blog post creation (use user's OAuth token)
+    headers = get_wix_headers(access_token)
+    
+    # Quick token/permission check (only log if issues found)
+    has_blog_scope = None
+    meta_site_id = None
+    try:
+        from .utils import decode_wix_token, extract_meta_from_token
+        token_data = decode_wix_token(access_token)
+        if 'scope' in token_data:
+            scopes = token_data.get('scope')
+            if isinstance(scopes, str):
+                scope_list = scopes.split(',') if ',' in scopes else [scopes]
+                has_blog_scope = any('BLOG' in s.upper() for s in scope_list)
+                if not has_blog_scope:
+                    logger.error("Wix: Token missing BLOG scopes - verify OAuth app permissions")
+        meta_info = extract_meta_from_token(access_token)
+        meta_site_id = meta_info.get('metaSiteId')
+    except Exception:
+        pass
+    
+    # Add wix-site-id to headers for all API calls (categories, tags, draft post)
+    resolved_site_id = site_id or meta_site_id or os.getenv('WIX_SITE_ID')
+    if resolved_site_id:
+        headers['wix-site-id'] = resolved_site_id
+        logger.info(f"Using wix-site-id: {resolved_site_id[:8]}... (source: {'param' if site_id else 'token' if meta_site_id else 'env'})")
+    else:
+        token_str = str(access_token)
+        if token_str.startswith('IST.'):
+            logger.error("IST. API key requires WIX_SITE_ID environment variable or site_id parameter.")
+        else:
+            logger.warning("No wix-site-id found — API calls may fail if token requires it")
+    
+    # Quick permission test (only log failures)
+    try:
+        test_headers = get_wix_headers(access_token)
+        import requests
+        test_response = requests.get(f"{base_url}/blog/v3/categories", headers=test_headers, timeout=5)
+        if test_response.status_code == 403:
+            logger.error("Wix: Permission denied - OAuth app missing BLOG.CREATE-DRAFT")
+        elif test_response.status_code == 401:
+            logger.error("Wix: Unauthorized - token may be expired")
+    except Exception:
+        pass
+    
+    token_length = len(access_token) if access_token else 0
+    wix_logger.log_token_info(token_length, has_blog_scope, meta_site_id)
+    
+    # Convert markdown to Ricos
+    # PRIMARY: Use Wix Ricos Documents API for best formatting support (tables, complex markdown, etc.)
+    # FALLBACK: Use custom parser if Wix API fails (no length limit, handles tables natively)
+    has_table = bool(re.search(r'^\|.*\|', content, re.MULTILINE))
+    
+    # Pre-check: Wix Ricos API has a 10,000 character limit for HTML input.
+    # Estimate HTML length from markdown (~1.4x expansion) to avoid silent truncation.
+    # If HTML would exceed limit, skip Wix API and use custom parser.
+    use_wix_api = True
+    MAX_HTML_LIMIT = 9800
+    estimated_html_len = len(content) * 1.4
+    if estimated_html_len > MAX_HTML_LIMIT:
+        logger.warning(f"Content too long for Wix Ricos API (est. HTML: {estimated_html_len:.0f} > {MAX_HTML_LIMIT}) — using custom parser")
+        use_wix_api = False
+    
+    ricos_content = None
+    if use_wix_api:
+        try:
+            logger.info("Converting markdown via Wix Ricos Documents API...")
+            ricos_content = convert_via_wix_api(content, access_token, base_url)
+            logger.info(f"Wix API conversion succeeded: {len(ricos_content.get('nodes', []))} nodes")
+        except Exception as e:
+            logger.warning(f"Wix API conversion failed, falling back to custom parser: {e}")
+    
+    # If markdown had tables and Wix API didn't produce TABLE nodes, fall back to custom parser
+    if has_table and ricos_content:
+        node_types = [n.get('type', '') for n in ricos_content.get('nodes', [])]
+        if 'TABLE' not in node_types:
+            logger.info("Markdown had tables but Wix API produced no TABLE nodes — using custom parser for table support")
+            ricos_content = None
+    
+    if not ricos_content or not isinstance(ricos_content, dict) or 'nodes' not in ricos_content:
+        logger.info("Using custom markdown parser for Ricos conversion")
+        ricos_content = convert_content_to_ricos(content, None)
+    
+    nodes_count = len(ricos_content.get('nodes', []))
+    wix_logger.log_ricos_conversion(nodes_count)
+    
+    # Validate Ricos content structure
+    if not isinstance(ricos_content, dict):
+        logger.error(f"richContent is not a dict: {type(ricos_content)}")
+        raise ValueError("richContent must be a dictionary object")
+    
+    if 'nodes' not in ricos_content or not isinstance(ricos_content['nodes'], list):
+        logger.error(f"richContent.nodes is missing or not a list: {ricos_content.get('nodes', 'MISSING')}")
+        raise ValueError("richContent must contain a 'nodes' array")
+    
+    # Remove top-level fields not expected by Blog API CREATE endpoint
+    # (Wix API converter may include type, id, metadata, documentStyle — strip them)
+    for field in ['type', 'id', 'metadata', 'documentStyle']:
+        if field in ricos_content:
+            logger.debug(f"Removing '{field}' from richContent for Blog API compatibility")
+            del ricos_content[field]
+    
+    # Ensure we only have 'nodes' in richContent for CREATE endpoint
+    ricos_content = {'nodes': ricos_content['nodes']}
+    
+    # SAFE ITEM 4: Prepend H1 title node if content doesn't start with one.
+    # The markdown typically starts at ## (H2) because the title is separate,
+    # but Wix renders the richContent as the full post body including the title.
+    # Without an H1, the post looks like it has no heading.
+    existing_first = ricos_content['nodes'][0] if ricos_content['nodes'] else None
+    has_h1 = existing_first and existing_first.get('type') == 'HEADING' and existing_first.get('headingData', {}).get('level') == 1
+    if not has_h1 and title:
+        title_node = {
+            'id': str(uuid.uuid4()),
+            'type': 'HEADING',
+            'nodes': [{
+                'id': str(uuid.uuid4()),
+                'type': 'TEXT',
+                'nodes': [],
+                'textData': {
+                    'text': str(title).strip(),
+                    'decorations': []
+                }
+            }],
+            'headingData': {'level': 1}
+        }
+        ricos_content['nodes'] = [title_node] + ricos_content['nodes']
+        logger.debug(f"Prepended H1 title node: '{str(title).strip()[:50]}'")
+    
+    logger.debug(f"✅ richContent structure validated: {len(ricos_content['nodes'])} nodes, keys: {list(ricos_content.keys())}")
+    
+    # Minimal payload per Wix docs: title, memberId, and richContent
+    # CRITICAL: Only include fields that have valid values (no None, no empty strings for required fields)
+    blog_data = {
+        'draftPost': {
+            'title': str(title).strip() if title else "Untitled",
+            'memberId': str(member_id).strip(),  # Required for third-party apps (validated above)
+            'richContent': ricos_content,  # Must be a valid Ricos object with ONLY 'nodes'
+            'language': 'en',
+        },
+        'publish': bool(publish),
+        'fieldsets': ['URL']  # Simplified fieldsets
+    }
+    
+    # SAFE ITEM 1: Auto-generate seoSlug from title if not provided by SEO metadata
+    # Wix uses this for the URL path (e.g. /post/my-blog-title)
+    slug_source = None
+    if seo_metadata and seo_metadata.get('url_slug'):
+        slug_source = str(seo_metadata['url_slug']).strip()
+    elif title:
+        slug_source = re.sub(r'[^a-z0-9]+', '-', str(title).strip().lower()).strip('-')
+        slug_source = slug_source[:60].rstrip('-')
+    if slug_source:
+        blog_data['draftPost']['seoSlug'] = slug_source
+    
+    # SAFE ITEM 3: Better excerpt — prefer meta_description, then first plain-text paragraph
+    excerpt = None
+    if seo_metadata and seo_metadata.get('meta_description'):
+        excerpt = str(seo_metadata['meta_description']).strip()[:200]
+    if not excerpt and content:
+        for node in ricos_content['nodes']:
+            if node.get('type') == 'PARAGRAPH':
+                texts = []
+                for child in node.get('nodes', []):
+                    if child.get('type') == 'TEXT' and child.get('textData', {}).get('text'):
+                        texts.append(child['textData']['text'])
+                if texts:
+                    excerpt = ' '.join(texts).strip()[:200]
+                    break
+    if excerpt:
+        blog_data['draftPost']['excerpt'] = excerpt
+    
+    # Add cover image if provided
+    if cover_image_url and import_image_func:
+        try:
+            media_id = import_image_func(access_token, cover_image_url, f'Cover: {title}')
+            # import_image_to_wix now returns Optional[str] — None means failure
+            if media_id and isinstance(media_id, str) and media_id.strip():
+                blog_data['draftPost']['media'] = {
+                    'wixMedia': {
+                        'image': {'id': media_id.strip()}
+                    },
+                    'displayed': True,
+                    'custom': True
+                }
+                logger.info(f"Cover image imported: {media_id[:16]}...")
+            else:
+                logger.warning(f"Cover image import returned no valid media_id (type={type(media_id)}). Continuing without cover image.")
+                warnings.append("Cover image could not be imported — post published without cover image.")
+        except Exception as e:
+            logger.warning(f"Cover image import failed (non-fatal): {e}. Continuing without cover image.")
+            warnings.append(f"Cover image import failed: {str(e)[:100]}")
+    
+    # Handle categories - can be either IDs (list of strings) or names (for lookup)
+    category_ids_to_use = None
+    if category_ids:
+        # Check if these are IDs (UUIDs) or names
+        if isinstance(category_ids, list) and len(category_ids) > 0:
+            # Use proper UUID detection instead of fragile heuristic
+            first_item = str(category_ids[0])
+            if _looks_like_uuid(first_item):
+                category_ids_to_use = category_ids
+            elif lookup_categories_func:
+                # These are names, need to lookup/create
+                extra_headers = {}
+                if resolved_site_id:
+                    extra_headers['wix-site-id'] = resolved_site_id
+                category_ids_to_use = lookup_categories_func(
+                    access_token, category_ids, extra_headers if extra_headers else None
+                )
+                if not category_ids_to_use:
+                    warnings.append(f"Categories could not be created ({len(category_ids)} requested) — OAuth app may lack BLOG.CREATE-DRAFT scope.")
+    
+    # Handle tags - can be either IDs (list of strings) or names (for lookup)
+    tag_ids_to_use = None
+    if tag_ids:
+        # Check if these are IDs (UUIDs) or names
+        if isinstance(tag_ids, list) and len(tag_ids) > 0:
+            # Use proper UUID detection instead of fragile heuristic
+            first_item = str(tag_ids[0])
+            if _looks_like_uuid(first_item):
+                tag_ids_to_use = tag_ids
+            elif lookup_tags_func:
+                # These are names, need to lookup/create
+                extra_headers = {}
+                if resolved_site_id:
+                    extra_headers['wix-site-id'] = resolved_site_id
+                tag_ids_to_use = lookup_tags_func(
+                    access_token, tag_ids, extra_headers if extra_headers else None
+                )
+                if not tag_ids_to_use:
+                    warnings.append(f"Tags could not be created ({len(tag_ids)} requested) — OAuth app may lack BLOG scope for tag management.")
+    
+    # Add categories if we have IDs (must be non-empty list of strings)
+    # CRITICAL: Wix API rejects empty arrays or arrays with None/empty strings
+    if category_ids_to_use and isinstance(category_ids_to_use, list) and len(category_ids_to_use) > 0:
+        # Filter out None, empty strings, and ensure all are valid UUID strings
+        valid_category_ids = [str(cid).strip() for cid in category_ids_to_use if cid and str(cid).strip()]
+        if valid_category_ids:
+            blog_data['draftPost']['categoryIds'] = valid_category_ids
+            logger.debug(f"Added {len(valid_category_ids)} category IDs")
+        else:
+            logger.warning("All category IDs were invalid, not including categoryIds in payload")
+    
+    # Add tags if we have IDs (must be non-empty list of strings)
+    # CRITICAL: Wix API rejects empty arrays or arrays with None/empty strings
+    if tag_ids_to_use and isinstance(tag_ids_to_use, list) and len(tag_ids_to_use) > 0:
+        # Filter out None, empty strings, and ensure all are valid UUID strings
+        valid_tag_ids = [str(tid).strip() for tid in tag_ids_to_use if tid and str(tid).strip()]
+        if valid_tag_ids:
+            blog_data['draftPost']['tagIds'] = valid_tag_ids
+            logger.debug(f"Added {len(valid_tag_ids)} tag IDs")
+        else:
+            logger.warning("All tag IDs were invalid, not including tagIds in payload")
+    
+    # Build SEO data from metadata if provided
+    # NOTE: seoData is optional - if it causes issues, we can create post without it
+    if seo_metadata:
+        try:
+            seo_data = build_seo_data(seo_metadata, title)
+            if seo_data:
+                tags_count = len(seo_data.get('tags', []))
+                keywords_count = len(seo_data.get('settings', {}).get('keywords', []))
+                wix_logger.log_seo_data(tags_count, keywords_count)
+                blog_data['draftPost']['seoData'] = seo_data
+        except Exception as e:
+            logger.warning(f"⚠️ Wix: SEO data build failed - {str(e)[:50]}")
+    else:
+        logger.debug("No SEO metadata provided to create_blog_post")
+    
+    try:
+        # Use wix-site-id already resolved earlier
+        extra_headers_final = {}
+        wix_site_id = resolved_site_id
+        if wix_site_id:
+            extra_headers_final['wix-site-id'] = wix_site_id
+            logger.info(f"Using wix-site-id for draft post: {wix_site_id[:8]}...")
+    except Exception as e:
+        logger.debug(f"Could not extract wix-site-id from token: {e}")
+
+    try:
+        # Validate payload structure before sending
+        draft_post = blog_data.get('draftPost', {})
+        if not isinstance(draft_post, dict):
+            raise ValueError("draftPost must be a dict object")
+
+        if 'richContent' in draft_post:
+            rc = draft_post['richContent']
+            if not isinstance(rc, dict):
+                raise ValueError(f"richContent must be a dict, got {type(rc)}")
+            if 'nodes' not in rc:
+                raise ValueError("richContent missing 'nodes' field")
+            if not isinstance(rc['nodes'], list):
+                raise ValueError(f"richContent.nodes must be a list, got {type(rc['nodes'])}")
+            logger.debug(f"✅ richContent validation passed: {len(rc.get('nodes', []))} nodes")
+
+        if 'seoData' in draft_post:
+            seo = draft_post['seoData']
+            if not isinstance(seo, dict):
+                raise ValueError(f"seoData must be a dict, got {type(seo)}")
+            if 'tags' in seo and not isinstance(seo['tags'], list):
+                raise ValueError(f"seoData.tags must be a list, got {type(seo.get('tags'))}")
+            if 'settings' in seo and not isinstance(seo['settings'], dict):
+                raise ValueError(f"seoData.settings must be a dict, got {type(seo.get('settings'))}")
+            logger.debug(f"✅ seoData validation passed: {len(seo.get('tags', []))} tags")
+
+        try:
+            validate_payload_no_none(blog_data, "blog_data")
+            logger.debug("✅ Payload validation passed: No None values found")
+        except ValueError as e:
+            logger.error(f"❌ Payload validation failed: {e}")
+            raise
+
+        logger.debug(f"Payload: draftPost keys={list(draft_post.keys())}, "
+                     f"nodes={len(draft_post.get('richContent', {}).get('nodes', []))}, "
+                     f"has_seo={'seoData' in draft_post}")
+
+        try:
+            import json
+            json.dumps(blog_data, ensure_ascii=False)
+        except (TypeError, ValueError) as e:
+            logger.error(f"❌ Payload JSON serialization failed: {e}")
+            raise ValueError(f"Payload contains non-serializable data: {e}")
+
+        rc = blog_data['draftPost']['richContent']
+        for field in ['documentStyle', 'metadata']:
+            if field in rc and (rc[field] is None or rc[field] == "" or not isinstance(rc[field], dict)):
+                del rc[field]
+
+        logger.info(f"📤 Publishing to Wix: title='{blog_data['draftPost'].get('title', '')}', "
+                     f"nodes={len(rc.get('nodes', []))}")
+
+        result = blog_service.create_draft_post(access_token, blog_data, extra_headers_final or None)
+
+        draft_post = result.get('draftPost', {})
+        post_id = draft_post.get('id', 'N/A')
+        wix_logger.log_operation_result("Create Draft Post", True, result)
+        logger.success(f"✅ Wix: Blog post created - ID: {post_id}")
+
+        if warnings:
+            result['_warnings'] = warnings
+            logger.info(f"Publish completed with {len(warnings)} warnings: {'; '.join(warnings)}")
+
+        return result
+    except TypeError as e:
+        import traceback
+        logger.error(f"TypeError in create_blog_post: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise
+    except requests.RequestException as e:
+        logger.error(f"Failed to create blog post: {e}")
+        if hasattr(e, 'response') and e.response is not None:
+            logger.error(f"Response body: {e.response.text}")
+        raise
+
